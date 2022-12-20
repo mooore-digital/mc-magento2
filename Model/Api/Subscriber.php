@@ -46,7 +46,6 @@ class Subscriber
         \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory,
         \Magento\Framework\Message\ManagerInterface $message
     ) {
-
         $this->_helper                  = $helper;
         $this->_subscriberCollection    = $subscriberCollection;
         $this->_message                 = $message;
@@ -55,6 +54,10 @@ class Subscriber
 
     public function sendSubscribers($storeId, $listId)
     {
+        if (!$this->_helper->isNewsletterModuleEnabled()) {
+            return [];
+        }
+
         //get subscribers
 //        $listId = $this->_helper->getGeneralList($storeId);
         $this->_interest = $this->_helper->getInterest($storeId);

@@ -46,6 +46,11 @@ class SaveBefore implements \Magento\Framework\Event\ObserverInterface
          */
         $customer = $observer->getCustomer();
         $storeId  = $customer->getStoreId();
+
+        if (!$this->_helper->isNewsletterModuleEnabled()) {
+            return;
+        }
+
         if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ACTIVE)) {
             if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ECOMMERCE_ACTIVE)) {
                 $mailchimpStoreId = $this->_helper->getConfigValue(

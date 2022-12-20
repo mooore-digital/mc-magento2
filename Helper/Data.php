@@ -35,6 +35,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     const XML_PATH_SYNC_DATE         = 'mailchimp/general/mcminsyncdateflag';
     const XML_ECOMMERCE_OPTIN        = 'mailchimp/ecommerce/customer_optin';
     const XML_ECOMMERCE_FIRSTDATE    = 'mailchimp/ecommerce/firstdate';
+    const XML_ECOMMERCE_SYNCHRONIZABLE_STATUSES = 'mailchimp/ecommerce/synchronizable_order_statuses';
     const XML_ABANDONEDCART_ACTIVE   = 'mailchimp/abandonedcart/active';
     const XML_ABANDONEDCART_FIRSTDATE   = 'mailchimp/abandonedcart/firstdate';
     const XML_ABANDONEDCART_PAGE     = 'mailchimp/abandonedcart/page';
@@ -572,6 +573,15 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     }
 
     /**
+     * @param null $store
+     * @return string[]|array
+     */
+    public function getSynchronizableOrderStatuses($store = null)
+    {
+        return explode(',', $this->getConfigValue(self::XML_ECOMMERCE_SYNCHRONIZABLE_STATUSES, $store));
+    }
+
+    /**
      * @return \Psr\Log\LoggerInterface
      */
     public function getLogger()
@@ -921,7 +931,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     }
     public function loadStores()
     {
-
         $mcUserName = [];
         $allStores = [];
         $connection = $this->_mailChimpStores->getResource()->getConnection();
@@ -1325,6 +1334,10 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
             \Magento\Store\Model\ScopeInterface::SCOPE_STORES,
             $storeId
         );
+    }
+    public function isNewsletterModuleEnabled()
+    {
+        return $this->_moduleManager->isEnabled('Magento_Newsletter');
     }
     public function resyncAllSubscribers($mailchimpList)
     {
