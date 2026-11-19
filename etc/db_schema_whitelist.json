@@ -4,12 +4,16 @@
       "mailchimp_abandonedcart_flag": true,
       "mailchimp_campaign_id": true,
       "mailchimp_landing_page": true,
-      "mailchimp_flag": true
+      "mailchimp_flag": true, 
+      "mailchimp_sync_error": true,
+      "mailchimp_sent": true
     }
   },
   "sales_order_grid": {
     "column": {
-      "mailchimp_flag": true
+      "mailchimp_flag": true, 
+      "mailchimp_sync_error": true,
+      "mailchimp_sent": true
     }
   },
   "quote": {
@@ -34,7 +38,8 @@
       "added_at": true
     },
     "index": {
-      "MAILCHIMP_ERRORS_STORE_ID_REGTYPE_ORIGINAL_ID": true
+      "MAILCHIMP_ERRORS_STORE_ID_REGTYPE_ORIGINAL_ID": true,
+      "MAILCHIMP_ERRORS_STORE_ID_ID": true
     },
     "constraint": {
       "PRIMARY": true
@@ -145,5 +150,23 @@
     "constraint": {
       "PRIMARY": true
     }
-  }
+  },
+    "catalog_product_entity": {
+        "column": {
+            "mailchimp_sync_error": true,
+            "mailchimp_sent": true
+        }
+    },
+    "mailchimp_notification": {
+        "column": {
+            "id": true,
+            "notification_data": true,
+            "generated_at": true,
+            "synced_at": true,
+            "processed": true
+        },
+        "constraint": {
+            "PRIMARY": true
+        }
+    }
 }

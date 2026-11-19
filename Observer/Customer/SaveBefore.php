@@ -13,6 +13,7 @@
 namespace Ebizmarts\MailChimp\Observer\Customer;
 
 use Magento\Framework\Event\Observer;
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
 
 class SaveBefore implements \Magento\Framework\Event\ObserverInterface
 {
@@ -21,21 +22,26 @@ class SaveBefore implements \Magento\Framework\Event\ObserverInterface
      */
     protected $_helper;
     /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
+    /**
      * @var \Magento\Newsletter\Model\SubscriberFactory
      */
     protected $subscriberFactory;
 
     /**
-     * SaveBefore constructor.
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param SyncHelper $syncHelper
      * @param \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory
      */
     public function __construct(
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        SyncHelper $syncHelper,
         \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory
     ) {
-
         $this->_helper              = $helper;
+        $this->syncHelper           = $syncHelper;
         $this->subscriberFactory    = $subscriberFactory;
     }
 
@@ -46,32 +52,35 @@ class SaveBefore implements \Magento\Framework\Event\ObserverInterface
          */
         $customer = $observer->getCustomer();
         $storeId  = $customer->getStoreId();
+        $websiteId = $customer->getWebsiteId();
 
         if (!$this->_helper->isNewsletterModuleEnabled()) {
             return;
         }
 
         if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ACTIVE)) {
+            // Mark subscriber before customer to match the cron lock-acquisition order
+            // (IS_SUBSCRIBER first, then IS_CUSTOMER) and prevent deadlocks.
+            $subscriber = $this->subscriberFactory->create();
+            $subscriber->loadBySubscriberEmail($customer->getEmail(), $websiteId);
+            if ($subscriber->getEmail() == $customer->getEmail()) {
+                $this->syncHelper->markRegisterAsModified(
+                    $subscriber->getId(),
+                    \Ebizmarts\MailChimp\Helper\Data::IS_SUBSCRIBER
+                );
+            }
             if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ECOMMERCE_ACTIVE)) {
                 $mailchimpStoreId = $this->_helper->getConfigValue(
                     \Ebizmarts\MailChimp\Helper\Data::XML_MAILCHIMP_STORE,
                     $storeId
                 );
-                $this->_helper->saveEcommerceData(
+                $this->syncHelper->saveEcommerceData(
                     $mailchimpStoreId,
                     $customer->getId(),
                     \Ebizmarts\MailChimp\Helper\Data::IS_CUSTOMER,
                     null,
                     null,
                     1
-                );
-            }
-            $subscriber = $this->subscriberFactory->create();
-            $subscriber->loadByEmail($customer->getEmail());
-            if ($subscriber->getEmail() == $customer->getEmail()) {
-                $this->_helper->markRegisterAsModified(
-                    $subscriber->getId(),
-                    \Ebizmarts\MailChimp\Helper\Data::IS_SUBSCRIBER
                 );
             }
         }

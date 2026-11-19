@@ -6,8 +6,9 @@ use Magento\Framework\Setup\ModuleDataSetupInterface;
 use Magento\Framework\Setup\Patch\DataPatchInterface;
 use Magento\Framework\Setup\Patch\PatchVersionInterface;
 use Magento\Config\Model\ResourceModel\Config\Data\CollectionFactory as ConfigFactory;
+use Magento\Framework\Setup\Patch\PatchRevertableInterface;
 
-class Migrate35 implements DataPatchInterface, PatchVersionInterface
+class Migrate35 implements DataPatchInterface, PatchVersionInterface, PatchRevertableInterface
 {
     /**
      * @var ModuleDataSetupInterface
@@ -48,10 +49,10 @@ class Migrate35 implements DataPatchInterface, PatchVersionInterface
          */
         foreach ($configCollection as $config) {
             try {
-                $config->setValue($this->_helper->encrypt($config->getvalue()));
+                $config->setValue($this->helper->encrypt($config->getvalue()));
                 $config->getResource()->save($config);
             } catch (\Exception $e) {
-                $this->_helper->log($e->getMessage());
+                $this->helper->log($e->getMessage());
             }
         }
         $configCollection = $this->configFactory->create();
@@ -64,6 +65,8 @@ class Migrate35 implements DataPatchInterface, PatchVersionInterface
         }
 
         $this->moduleDataSetup->getConnection()->endSetup();
+
+        return $this;
     }
     public static function getDependencies()
     {
@@ -77,5 +80,16 @@ class Migrate35 implements DataPatchInterface, PatchVersionInterface
     {
         return '102.3.35';
     }
+
+    /**
+     * Revert data changes
+     *
+     * @return bool
+     */
+    public function revert()
+    {
+        return true;
+    }
+
 }
 

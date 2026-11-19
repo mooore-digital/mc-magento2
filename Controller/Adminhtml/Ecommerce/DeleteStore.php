@@ -51,7 +51,7 @@ class DeleteStore extends \Magento\Backend\App\Action
         \Ebizmarts\MailChimp\Helper\Data $helper,
         \Magento\Config\Model\ResourceModel\Config $config
     ) {
-    
+
         parent::__construct($context);
         $this->resultJsonFactory    = $resultJsonFactory;
         $this->helper               = $helper;
@@ -85,14 +85,19 @@ class DeleteStore extends \Magento\Backend\App\Action
         try {
             $this->helper->deleteStore($mailchimpStore);
             $this->_config->deleteConfig(\Ebizmarts\MailChimp\Helper\Data::XML_MAILCHIMP_STORE, $scope, $storeId);
+            // Clear the initial-sync-complete flag so carts stay blocked until the
+            // store is fully re-synced after being reconnected.
+            $this->helper->deleteMCMinSyncing($mailchimpStore);
         } catch (ValidatorException $e) {
             $valid = 0;
             $message = $e->getMessage();
         }
-        return $resultJson->setData([
+        $ret = [
             'valid' => (int)$valid,
             'message' => $message,
-        ]);
+        ];
+        $this->helper->buttonPressed("DeleteStore",$ret);
+        return $resultJson->setData($ret);
     }
     protected function _isAllowed()
     {

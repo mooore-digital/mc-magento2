@@ -1,4 +1,614 @@
-# Change Log
+# Changelog
+
+## [103.4.87](https://github.com/mailchimp/mc-magento2/tree/103.4.87)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.86...103.4.87)
+
+**Implemented enhancements:**
+
+- Turn the Mailchimp Pixel on when a store view connects [\#2403](https://github.com/mailchimp/mc-magento2/pull/2403)
+
+  The Mailchimp Pixel is now on by default for newly connected stores, and it
+  follows your store's cookie settings. When a save connects a store view to a
+  Mailchimp store -- at store view, website or default scope -- the extension
+  enables the Pixel on the connected site bound to that Mailchimp store.
+
+  Store views that were already connected are left exactly as they were, and a
+  Pixel setting someone chose is never overridden. On a host whose Mailchimp
+  store has no connected site of its own the Pixel stays off and the reason is
+  logged, because a second site on the same host cannot attribute. A failure
+  never blocks the connection: it is logged, the Pixel stays off, and turning it
+  on in the configuration tries again. The Pixel toggle is locked until its
+  store view is connected, including in single-store mode.
+
+  The extension's status report also carries whether the Pixel is on and
+  whether its script is present.
+
+- Point the connect popup at the relay, and open it at the size the consent screen needs [\#2377](https://github.com/mailchimp/mc-magento2/pull/2377)
+
+  "Get API credentials" now opens a single ebizmarts URL instead of Mailchimp's
+  authorize endpoint, so the client id and the redirect address no longer ship
+  inside the extension. The merchant flow is unchanged: the key is shown to copy
+  into the API Key field. The popup opens at 1035x800, the size Mailchimp's
+  consent screen needs, a quarter of the way down the screen so the consent
+  button stays visible.
+
+- Add a security policy [\#2399](https://github.com/mailchimp/mc-magento2/pull/2399)
+
+  `SECURITY.md` says how to report a vulnerability privately, what makes a
+  report useful and what a reporter can expect.
+
+**Fixed bugs:**
+
+- Mirror an unsubscribe wherever Magento makes one, and do not lose it [\#2383](https://github.com/mailchimp/mc-magento2/pull/2383)
+
+  An unsubscribe through the link in Magento's emails, or through the admin
+  grid's mass action, never reached Mailchimp on this line: nothing hooked the
+  subscriber model's `unsubscribe()`, and the batch sync only sends subscribed
+  rows. It is now mirrored to Mailchimp once per unsubscribe, even when
+  Magento's own unsubscription email fails to send.
+
+- Compare the webhook key in constant time [\#2393](https://github.com/mailchimp/mc-magento2/pull/2393)
+
+  The key that authenticates Mailchimp's webhook calls was compared with `!=`.
+  It is now compared with `hash_equals()`, and a key sent as an array is refused
+  with a 403 instead of causing a 500. The key itself is unchanged, so existing
+  webhooks keep working.
+
+**Dependencies:**
+
+- Unchanged. The `ebizmarts/mailchimp-lib` floor stays at `>=3.0.52`; nothing in
+  this release asks anything new of the library.
+
+## [103.4.86](https://github.com/mailchimp/mc-magento2/tree/103.4.86)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.85...103.4.86)
+
+**This release adds a database column.** `mailchimp_sync_batches` gains
+`response_attempts`, so `bin/magento setup:upgrade` is required after updating.
+
+**Fixed bugs:**
+
+- The merge-field map is per store view, not per process [\#2373](https://github.com/mailchimp/mc-magento2/pull/2373)
+
+  `getMapFields()` remembered its result without the store view in the key, and
+  the ecommerce cron walks every store view with one helper. So on a
+  multi-store-view installation every view after the first synchronised with the
+  **first view's merge-field map** -- wrong merge fields written into the
+  merchant's audience, with nothing logged and no counter moved.
+
+- The attribute options are per store view too [\#2374](https://github.com/mailchimp/mc-magento2/pull/2374)
+
+  One layer down and found in review of the above. Attribute option labels are
+  store-scoped, and an attribute carrying no store id resolves them against
+  whichever store view is current -- which the cron changes on every pass. Only
+  attributes with a source are affected, which on a stock install is `gender`
+  plus any select attribute the merchant added.
+
+- Give up on a batch result that cannot be read, and re-send what it carried [\#2371](https://github.com/mailchimp/mc-magento2/pull/2371)
+
+  A batch whose result could not be downloaded or unpacked was retried on every
+  cron run -- re-fetching the status and re-downloading the archive each time --
+  until Mailchimp expired it about a week later. It now stops after five
+  readings of a finished batch and re-sends what the batch carried rather than
+  deleting the sync rows, and the real cause of the failure is logged instead of
+  a fixed message that pointed at a missing directory.
+
+  The two admin "get response" buttons gained a distinct message for a batch
+  that has not finished yet, which until now could not be told apart from one
+  whose response Mailchimp had deleted.
+
+**Implemented enhancements:**
+
+- Carry the configuration snapshot on the extension beacon [\#2372](https://github.com/mailchimp/mc-magento2/pull/2372), [\#2375](https://github.com/mailchimp/mc-magento2/pull/2375)
+
+  The extension's status report now carries how the store view is configured:
+  the settings, the merge-field map and the interest groups. It is the one
+  diagnostic the older support-log channel held that nothing else replaced, and
+  it exists so that channel can be switched off -- that one also carries request
+  and response bodies, which is shopper data, and writes them into the
+  merchant's own database.
+
+  No merchant-authored text travels: the two settings that are HTML the merchant
+  writes are reported as whether they were customised, never as their content.
+
+## [103.4.85](https://github.com/mailchimp/mc-magento2/tree/103.4.85)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.84...103.4.85)
+
+**Implemented enhancements:**
+
+- Name the surface the process is serving [\#2369](https://github.com/mailchimp/mc-magento2/pull/2369)
+
+  The library sees `PHP_SAPI` and nothing else, and that answers a different
+  question. `pub/cron.php` refuses to run under the CLI SAPI and then boots the
+  framework's `Cron` application, so an installation running cron over HTTP is a
+  web process doing a full sync -- and nothing downstream could tell it from a
+  shopper's page render.
+
+  The extension now passes the application area and the dispatched action, from
+  the three places that construct the API. Guarded three ways: the library method
+  is checked because an app/code install pairs whichever library is on disk with
+  whichever module is on disk; `getAreaCode()` is allowed to throw, because
+  nothing having set an area yet is a normal state rather than an error; and
+  `getFullActionName()` is checked because it is not on `RequestInterface`.
+
+  The segments are checked one at a time rather than the value they composed.
+  Nothing constrains them to strings, and the concatenation turns whatever they
+  were into an ordinary string -- integers compose `1_2_3` and booleans compose
+  `1_1_1`, both of which name a route that has never existed. An unrouted request
+  composes the bare delimiters and is refused for the same reason.
+
+**Dependencies:**
+
+- The `ebizmarts/mailchimp-lib` floor moves from `>=3.0.51` to `>=3.0.52` [\#2370](https://github.com/mailchimp/mc-magento2/pull/2370)
+
+  3.0.52 is the release that accepts the area and the action. Below it the
+  extension's call is guarded and simply does nothing, so this is a floor for the
+  feature rather than for correctness -- but an installation below it reports no
+  surface at all, which is the state this release exists to end.
+
+  It remains a floor rather than a pin, as it has been since 3.0.44, so an
+  installation already resolving to something newer is unaffected.
+
+## [103.4.84](https://github.com/mailchimp/mc-magento2/tree/103.4.84)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.83...103.4.84)
+
+**Implemented enhancements:**
+
+- Ask for the audience's total contacts on the call already being made [\#2365](https://github.com/mailchimp/mc-magento2/pull/2365)
+- Ask for total_contacts on the audience collection too [\#2367](https://github.com/mailchimp/mc-magento2/pull/2367)
+
+**Fixed bugs:**
+
+- Ask for total_contacts on every single-audience read, not only the cron [\#2366](https://github.com/mailchimp/mc-magento2/pull/2366)
+
+**Dependencies:**
+
+- The `ebizmarts/mailchimp-lib` floor moves from `>=3.0.49` to `>=3.0.51` [\#2368](https://github.com/mailchimp/mc-magento2/pull/2368)
+
+  3.0.51 is the release that reads the audience collection. Every call site in this
+  version now asks for the contact total, and the collection is where the account's
+  own audience count comes from -- the figure that says whether an audience nobody
+  here looked at exists at all. Against 3.0.50 the extension still asks and nothing
+  reads the collection; against anything older the argument is simply ignored.
+
+  It remains a floor rather than a pin, as it has been since 3.0.44, so an
+  installation already resolving to something newer is unaffected -- but an
+  installation **pinned** below 3.0.51 will not be able to install this release
+  until it moves.
+
+## [103.4.83](https://github.com/mailchimp/mc-magento2/tree/103.4.83)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.82...103.4.83)
+
+**Fewer calls to the Mailchimp API from merchant servers:**
+
+- Remember a failed connected-site lookup instead of repeating it every render [\#2358](https://github.com/mailchimp/mc-magento2/pull/2358)
+- Load the interest-group tree only when a webhook row needs it [\#2359](https://github.com/mailchimp/mc-magento2/pull/2359)
+
+**Fixed bugs:**
+
+- Do not emit a script tag when the connected-site URL is empty [\#2360](https://github.com/mailchimp/mc-magento2/pull/2360)
+- Reject the store dropdown's non-answers, and keep a good list id on a failed lookup [\#2361](https://github.com/mailchimp/mc-magento2/pull/2361)
+- Compare the library version as a version, and align the floor it checks [\#2364](https://github.com/mailchimp/mc-magento2/pull/2364)
+
+**Merged pull requests:**
+
+- Say that a partial interest-group load is deliberate [\#2362](https://github.com/mailchimp/mc-magento2/pull/2362)
+
+**Dependencies:**
+
+- The `ebizmarts/mailchimp-lib` floor moves from `>=3.0.47` to `>=3.0.49` [\#2364](https://github.com/mailchimp/mc-magento2/pull/2364)
+
+  3.0.49 is the release that turns contact sharing on wherever nobody has declined.
+  It is a floor rather than a pin, as it has been since 3.0.44, so an installation
+  already resolving to something newer is unaffected — but an installation **pinned**
+  to 3.0.48 will not be able to install this release until it moves.
+
+## [103.4.82](https://github.com/mailchimp/mc-magento2/tree/103.4.82)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.81...103.4.82)
+
+**Implemented enhancements:**
+
+- Report extension status to the ebizmarts service once an hour [\#2341](https://github.com/mailchimp/mc-magento2/pull/2341)
+- Let merchants opt out of sharing account contact details [\#2344](https://github.com/mailchimp/mc-magento2/pull/2344)
+- Tell the library which Mailchimp store this store view syncs into [\#2350](https://github.com/mailchimp/mc-magento2/pull/2350)
+- Report the Magento version in the user agent [\#2353](https://github.com/mailchimp/mc-magento2/pull/2353)
+
+**Fewer calls to the Mailchimp API from merchant servers:**
+
+- Ask a rejected API key once per run, not once per store view [\#2351](https://github.com/mailchimp/mc-magento2/pull/2351)
+- Stop resolving the connected-site URL on every page render [\#2354](https://github.com/mailchimp/mc-magento2/pull/2354)
+- Fetch interest groups once per store view, and only when they can be used [\#2355](https://github.com/mailchimp/mc-magento2/pull/2355)
+
+**Fixed bugs:**
+
+- Fix profile webhook recreating newsletter subscribers as Not Activated [\#2338](https://github.com/mailchimp/mc-magento2/pull/2338)
+- Send the chosen variant in ProductVariantDto.id for configurable products [\#2340](https://github.com/mailchimp/mc-magento2/pull/2340)
+- Write a broadcast notification to the inbox once, not once per store view [\#2345](https://github.com/mailchimp/mc-magento2/pull/2345)
+- Bound mailchimp_errors with a row ceiling, without overriding anyone [\#2347](https://github.com/mailchimp/mc-magento2/pull/2347)
+- Apply the Error fix to the rest of the edge classes [\#2349](https://github.com/mailchimp/mc-magento2/pull/2349)
+- Name the store when loading Mailchimp stores [\#2352](https://github.com/mailchimp/mc-magento2/pull/2352)
+
+**Merged pull requests:**
+
+- Keep tests out of release archives [\#2342](https://github.com/mailchimp/mc-magento2/pull/2342)
+- Update PixelStateWriter tests to the behaviour that shipped [\#2343](https://github.com/mailchimp/mc-magento2/pull/2343)
+- Ship a phpunit configuration for this extension's unit suite [\#2346](https://github.com/mailchimp/mc-magento2/pull/2346)
+- Require performance claims to be measured after ANALYZE TABLE [\#2348](https://github.com/mailchimp/mc-magento2/pull/2348)
+
+## [103.4.81](https://github.com/mailchimp/mc-magento2/tree/103.4.81)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.80...103.4.81)
+
+**Fixed bugs:**
+
+- Remove usage of campaign\_id as an attribute in orders API requests [\#2293](https://github.com/mailchimp/mc-magento2/issues/2293)
+
+**Merged pull requests:**
+
+- Fix cart sync gate: block carts until the store is fully synced [\#2336](https://github.com/mailchimp/mc-magento2/pull/2336)
+- Harden abandoned-cart restore and escape admin account details [\#2333](https://github.com/mailchimp/mc-magento2/pull/2333)
+- Migrate support email to mailchimp@help.ebizmarts.com [\#2332](https://github.com/mailchimp/mc-magento2/pull/2332)
+
+## [103.4.80](https://github.com/mailchimp/mc-magento2/tree/103.4.80)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.79...103.4.80)
+
+**Fixed bugs:**
+
+- CleanIssyncOrphanRows data patch fails on MySQL with error 1093 [\#2327](https://github.com/mailchimp/mc-magento2/issues/2327)
+- Harden order sync: wrong Exception import in Model/Api/Order.php lets one bad order abort the whole ebizmarts\_ecommerce cron [\#2321](https://github.com/mailchimp/mc-magento2/issues/2321)
+- _markSpecialPrices causes excessive CPU load on large catalogs (full table scan + N+1 queries) [\#2329](https://github.com/mailchimp/mc-magento2/issues/2329)
+
+## [103.4.79](https://github.com/mailchimp/mc-magento2/tree/103.4.79)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.78...103.4.79)
+
+**Implemented enhancements:**
+
+- Pixel integration [\#2280](https://github.com/mailchimp/mc-magento2/issues/2280)
+- PHP 8.5 deprecated usage of curl\_close [\#2287](https://github.com/mailchimp/mc-magento2/issues/2287)
+- Processing products takes too much time in \_markSpecialPrices [\#2294](https://github.com/mailchimp/mc-magento2/issues/2294)
+
+**Fixed bugs:**
+
+- Concurrent cron writes produce duplicate core\_config\_data rows causing site-wide fatal TypeError [\#2312](https://github.com/mailchimp/mc-magento2/issues/2312)
+- Fix deadlock in SaveBefore observer by acquiring IS\_SUBSCRIBER lock before IS\_CUSTOMER [\#2292](https://github.com/mailchimp/mc-magento2/issues/2292)
+- Using a second Mailchimp account on a certain Magento scope makes the dropdown list disappear [\#2288](https://github.com/mailchimp/mc-magento2/issues/2288)
+- Wrong Exception import in Helper/Data.php breaks catch blocks [\#2290](https://github.com/mailchimp/mc-magento2/issues/2290)
+- Array to string conversion warning \(follow-up\) [\#2250](https://github.com/mailchimp/mc-magento2/issues/2250)
+
+## [103.4.78](https://github.com/mailchimp/mc-magento2/tree/103.4.78)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.77...103.4.78)
+
+**Fixed bugs:**
+
+- Error when delete the current mailchimp store and access the configuration [\#2268](https://github.com/mailchimp/mc-magento2/issues/2268)
+- New order/cart send product as new [\#2262](https://github.com/mailchimp/mc-magento2/issues/2262)
+- Products permanently stuck in SYNCERROR or NEEDTORESYNC [\#2256](https://github.com/mailchimp/mc-magento2/issues/2256)
+- Array to string conversion warning [\#2250](https://github.com/mailchimp/mc-magento2/issues/2250)
+
+## [103.4.77](https://github.com/mailchimp/mc-magento2/tree/103.4.77)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.76...103.4.77)
+
+**Implemented enhancements:**
+
+- Send an event every time visit an abandoned cart [\#2233](https://github.com/mailchimp/mc-magento2/issues/2233)
+
+**Fixed bugs:**
+
+- Ebizmarts\MailChimp\Model\Api\Product.php can break during iteration [\#2239](https://github.com/mailchimp/mc-magento2/issues/2239)
+- Incorrect DATETIME value: '' [\#2227](https://github.com/mailchimp/mc-magento2/issues/2227)
+
+## [103.4.76](https://github.com/mailchimp/mc-magento2/tree/103.4.76)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.75...103.4.76)
+
+**Implemented enhancements:**
+
+- Feature Request: Store customers email in logs for abandoned baskets. [\#2084](https://github.com/mailchimp/mc-magento2/issues/2084)
+
+**Fixed bugs:**
+
+- Error cleaning the mailchimp\_statistics table [\#2210](https://github.com/mailchimp/mc-magento2/issues/2210)
+
+## [103.4.75](https://github.com/mailchimp/mc-magento2/tree/103.4.75)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.74...103.4.75)
+
+**Implemented enhancements:**
+
+- Add total amount of subscribers to the registration [\#2199](https://github.com/mailchimp/mc-magento2/issues/2199)
+- Add data to the registration [\#2192](https://github.com/mailchimp/mc-magento2/issues/2192)
+
+## [103.4.74](https://github.com/mailchimp/mc-magento2/tree/103.4.74)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.73...103.4.74)
+
+**Implemented enhancements:**
+
+- Add flag to sync not salable products [\#2181](https://github.com/mailchimp/mc-magento2/issues/2181)
+
+*Fixed bugs:**
+
+- Patches are not removed after the module uninstallation [\#2170](https://github.com/mailchimp/mc-magento2/pull/2170)
+- Add config checking in afterLoadByCustomer [\#2168](https://github.com/mailchimp/mc-magento2/pull/2168)
+
+## [103.4.73](https://github.com/mailchimp/mc-magento2/tree/103.4.73)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.72...103.4.73)
+
+**Implemented enhancements:**
+
+- Change the way that the statistics are synced [\#2167](https://github.com/mailchimp/mc-magento2/issues/2167)
+
+## [103.4.72](https://github.com/mailchimp/mc-magento2/tree/103.4.72)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.71...103.4.72)
+
+**Implemented enhancements:**
+
+- Add support for grouped products [\#2156](https://github.com/mailchimp/mc-magento2/issues/2156)
+
+## [103.4.71](https://github.com/mailchimp/mc-magento2/tree/103.4.71)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.70...103.4.71)
+
+**Implemented enhancements:**
+
+- Add the bundle product itself to the lines of the cart [\#2142](https://github.com/mailchimp/mc-magento2/issues/2142)
+- Add the bundle product itself to the lines of the order [\#2136](https://github.com/mailchimp/mc-magento2/issues/2136)
+
+
+## [103.4.70](https://github.com/mailchimp/mc-magento2/tree/103.4.70)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.69...103.4.70)
+
+**Implemented enhancements:**
+
+- Add clean period for mailchimp\_notification table [\#2118](https://github.com/mailchimp/mc-magento2/issues/2118)
+- Add bundle products support [\#2112](https://github.com/mailchimp/mc-magento2/issues/2112)
+
+**Fixed bugs:**
+
+- Add translation for options mergevar [\#2124](https://github.com/mailchimp/mc-magento2/issues/2124)
+
+## [103.4.69](https://github.com/mailchimp/mc-magento2/tree/HEAD)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.68...103.4.69)
+
+**Fixed bugs:**
+
+- Strict CSP compatibility [\#2104](https://github.com/mailchimp/mc-magento2/issues/2104)
+- Huge memory usage from ebizmarts\_generate\_statistics cron [\#2098](https://github.com/mailchimp/mc-magento2/issues/2098)
+
+# [103.4.68](https://github.com/mailchimp/mc-magento2/tree/103.4.68)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.67...103.4.68)
+
+**Fixed bugs:**
+
+- SyncStatistics error when the data in mailchimp\_notification is not a valid json [\#2083](https://github.com/mailchimp/mc-magento2/issues/2083)
+- PHP 8.4 compatibility [\#2091](https://github.com/mailchimp/mc-magento2/issues/2091)
+
+## [103.4.67](https://github.com/mailchimp/mc-magento2/tree/103.4.67)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.66-p1...103.4.67)
+
+**Fixed bugs:**
+
+- Cron is taking long time \(special price related\) [\#2063](https://github.com/mailchimp/mc-magento2/issues/2063)
+- Deprecated Warning in Order.php - Null passed to hash\(\) on orders without email \(PHP 8.3\) [\#2062](https://github.com/mailchimp/mc-magento2/issues/2062)
+- Missing description in db_schema.xml results in perpetual "not up to date"-state  [\#2076](https://github.com/mailchimp/mc-magento2/issues/2076)
+
+## [103.4.66-p1](https://github.com/mailchimp/mc-magento2/tree/103.4.66-p1)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.66...103.4.66-1)
+
+**Fixed bugs:**
+
+- Invalid default value in db_schema.xml for datetime column "synced_at" [\#2058](https://github.com/mailchimp/mc-magento2/issues/2058)
+
+
+## [103.4.66](https://github.com/mailchimp/mc-magento2/tree/103.4.66)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.65...103.4.66)
+
+**Implemented enhancements:**
+
+- Include the Billing and Shipping street in the maps fields [\#2043](https://github.com/mailchimp/mc-magento2/issues/2043)
+- Generate support data [\#2041](https://github.com/mailchimp/mc-magento2/issues/2041)
+- Put a config to sync only customers with orders [\#2035](https://github.com/mailchimp/mc-magento2/issues/2035)
+
+## [103.4.65](https://github.com/mailchimp/mc-magento2/tree/103.4.65)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.64...103.4.65)
+
+**Implemented enhancements:**
+
+- missing i18n translation [\#1983](https://github.com/mailchimp/mc-magento2/issues/1983)
+
+**Fixed bugs:**
+
+- Merge field value is deleted on the Magento store, but not on Mailchimp [\#1388](https://github.com/mailchimp/mc-magento2/issues/1388)
+- Wrong total revenue in MailChimp [\#395](https://github.com/mailchimp/mc-magento2/issues/395)
+
+
+## [103.4.64](https://github.com/mailchimp/mc-magento2/tree/103.4.64)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.63...103.4.64)
+
+**Fixed bugs:**
+
+- Manage deleted and not salable products [\#2003](https://github.com/mailchimp/mc-magento2/issues/2003)
+- Configuration page in Magento's backend takes a long time to load in certain cases [\#2002](https://github.com/mailchimp/mc-magento2/issues/2002)
+
+## [103.4.63](https://github.com/mailchimp/mc-magento2/tree/103.4.63)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.62...103.4.63)
+
+**Implemented enhancements:**
+
+- Add the date to the error grid [\#1972](https://github.com/mailchimp/mc-magento2/issues/1972)
+
+**Fixed bugs:**
+
+- Order status change is not synced when done through webapi [\#1985](https://github.com/mailchimp/mc-magento2/issues/1985)
+- Column not found: 1054 Unknown column 'mailchimp\_sync' in 'order clause' [\#1981](https://github.com/mailchimp/mc-magento2/issues/1981)
+
+## [103.4.62](https://github.com/mailchimp/mc-magento2/tree/103.4.62)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.61...103.4.62)
+
+**Fixed bugs:**
+
+- Bad financial status in mailchimp [\#1962](https://github.com/mailchimp/mc-magento2/issues/1962)
+
+## [103.4.61](https://github.com/mailchimp/mc-magento2/tree/103.4.61)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.60...103.4.61)
+
+**Implemented enhancements:**
+
+- Put the inventory\_quantity = 0 when delete a product in magento [\#1945](https://github.com/mailchimp/mc-magento2/issues/1945)
+
+**Fixed bugs:**
+
+- Doesn't search for customer activity for modified orders [\#1951](https://github.com/mailchimp/mc-magento2/issues/1951)
+- Abandoned cart button doesn't load the cart when click on it [\#1939](https://github.com/mailchimp/mc-magento2/issues/1939)
+
+## [103.4.60](https://github.com/mailchimp/mc-magento2/tree/103.4.60)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.59...103.4.60)
+
+**Fixed bugs:**
+
+- The token change and can't retrieve the cart from the abandoned cart email [\#1930](https://github.com/mailchimp/mc-magento2/issues/1930)
+- Abs fail when discount amount is null [\#1921](https://github.com/mailchimp/mc-magento2/issues/1921)
+- Error table prefix [\#1920](https://github.com/mailchimp/mc-magento2/issues/1920)
+- Check in webhook cron if the listid is OK when get the groups [\#1914](https://github.com/mailchimp/mc-magento2/issues/1914)
+
+## [103.4.59](https://github.com/mailchimp/mc-magento2/tree/103.4.59)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.58...103.4.59)
+
+**Fixed bugs:**
+
+- "The website with id X that was requested wasn't found. Verify the website and try again" [\#1890](https://github.com/mailchimp/mc-magento2/issues/1890)
+
+## [103.4.58](https://github.com/mailchimp/mc-magento2/tree/103.4.58)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.57...103.4.58)
+
+**Implemented enhancements:**
+
+- Add controls to the webhook cron to exclude stores with no mailchimp store [\#1880](https://github.com/mailchimp/mc-magento2/issues/1880)
+- Use the activity API end point to fill the campaign id [\#1866](https://github.com/mailchimp/mc-magento2/issues/1866)
+
+**Fixed bugs:**
+
+- Sometimes the mailchimp\_sync\_modified and mailchimp\_sent fields in mailchimp\_sync\_ecommerce are not synchronized [\#1891](https://github.com/mailchimp/mc-magento2/issues/1891)
+- SQL Error on config page right after installation [\#1865](https://github.com/mailchimp/mc-magento2/issues/1865)
+- Trinidad & Tobago country incorrectly synced [\#1863](https://github.com/mailchimp/mc-magento2/issues/1863)
+- Unescaped output  [\#1841](https://github.com/mailchimp/mc-magento2/issues/1841)
+- Cannot save some customers [\#1840](https://github.com/mailchimp/mc-magento2/issues/1840)
+- Error "Resource Not Found for Api Call:" when try to access batches grid [\#1834](https://github.com/mailchimp/mc-magento2/issues/1834)
+- Magento subscription email sent despite 'Magento always managed emails' set to 'No' [\#1311](https://github.com/mailchimp/mc-magento2/issues/1311)
+
+## [103.4.57](https://github.com/mailchimp/mc-magento2/tree/103.4.57)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.56...103.4.57)
+
+**Fixed bugs:**
+
+- The order is not marked as modified when cancel [\#1822](https://github.com/mailchimp/mc-magento2/issues/1822)
+- Unable to assign a customer to another website [\#1818](https://github.com/mailchimp/mc-magento2/issues/1818)
+
+## [103.4.56](https://github.com/mailchimp/mc-magento2/tree/103.4.56)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.55...103.4.56)
+
+**Implemented enhancements:**
+
+- MailChimp Customer Tab Empty [\#1804](https://github.com/mailchimp/mc-magento2/issues/1804)
+
+**Fixed bugs:**
+
+- Call to a member function getId\(\) on null [\#1805](https://github.com/mailchimp/mc-magento2/issues/1805)
+- Cannot View Customer Info - Too Few Arguments In Customer.php [\#1802](https://github.com/mailchimp/mc-magento2/issues/1802)
+
+## [103.4.55](https://github.com/mailchimp/mc-magento2/tree/103.4.55)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.54...103.4.55)
+
+**Fixed bugs:**
+
+- Checkout is broken (error in the etc/di.xml) [\#1790](https://github.com/mailchimp/mc-magento2/issues/1790)
+
+## [103.4.54](https://github.com/mailchimp/mc-magento2/tree/103.4.54)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.53...103.4.54)
+
+**Implemented enhancements:**
+
+- Performance: Excessive SQL usage in Sales and Products Grid [\#1759](https://github.com/mailchimp/mc-magento2/issues/1759)
+- Remove unused code in Heper/Data.php [\#1753](https://github.com/mailchimp/mc-magento2/issues/1753)
+
+**Fixed bugs:**
+
+- Upgrade to 103.4.53 caused UPDATE on over 60% of the existing \(old\) orders [\#1772](https://github.com/mailchimp/mc-magento2/issues/1772)
+- ebizmarts\_ecommerce job unchecks "Use Default Value" checkbox for some product attributes [\#1758](https://github.com/mailchimp/mc-magento2/issues/1758)
+- Check if the Abandoned cart is enabled, the ecommerce must be enabled [\#1745](https://github.com/mailchimp/mc-magento2/issues/1745)
+
+## [103.4.53](https://github.com/mailchimp/mc-magento2/tree/103.4.53)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.52...103.4.53)
+
+**Fixed bugs:**
+
+- Cannot upgrade to latest version due to patch error [\#1732](https://github.com/mailchimp/mc-magento2/issues/1732)
+
+## [103.4.52](https://github.com/mailchimp/mc-magento2/tree/103.4.52)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.51...103.4.52)
+
+**Implemented enhancements:**
+
+- Optimize the product grid to avoid access the ecommerce table [\#1714](https://github.com/mailchimp/mc-magento2/issues/1714)
+- Optimize the order grid to avoid access the ecommerce table [\#1708](https://github.com/mailchimp/mc-magento2/issues/1708)
+- Add an option in the configuration page to modify the timeout in the Mailchimp api connections [\#1697](https://github.com/mailchimp/mc-magento2/issues/1697)
+- Add links to campaign and member in mailchimp in the order grid [\#1690](https://github.com/mailchimp/mc-magento2/issues/1690)
+
+**Fixed bugs:**
+
+- The sync of orders fails if the order has no billing address [\#1720](https://github.com/mailchimp/mc-magento2/issues/1720)
+
+## [103.4.51](https://github.com/mailchimp/mc-magento2/tree/103.4.51)
+
+[Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.50...103.4.51)
+
+**Implemented enhancements:**
+
+- Put tracking\_number when the order is shipped [\#1667](https://github.com/mailchimp/mc-magento2/issues/1667)
+- Create a grid to show our cronjobs in the cron\_schedule  [\#1648](https://github.com/mailchimp/mc-magento2/issues/1648)
+- Create JS code that automatically enables ecommerce syncing when abandoned cart syncing is disabled [\#1633](https://github.com/mailchimp/mc-magento2/issues/1633)
+
+**Fixed bugs:**
+
+- Invoice and shipment pluging doesn't work [\#1668](https://github.com/mailchimp/mc-magento2/issues/1668)
+- Error fetching store ID row in batch grid [\#1656](https://github.com/mailchimp/mc-magento2/issues/1656)
+- Duplicate entries in the stores grid [\#1650](https://github.com/mailchimp/mc-magento2/issues/1650)
+- Resync subscribers and Resync products always resyncs default store [\#1640](https://github.com/mailchimp/mc-magento2/issues/1640)
+- Database schema needed for batch grid won't be created after upgrading module as opposed to installing it [\#1627](https://github.com/mailchimp/mc-magento2/issues/1627)
+- Bad class name [\#1613](https://github.com/mailchimp/mc-magento2/issues/1613)
+- Fail phpcs test [\#1607](https://github.com/mailchimp/mc-magento2/issues/1607)
+
 ## [103.4.50](https://github.com/mailchimp/mc-magento2/tree/103.4.50)
 
 [Full Changelog](https://github.com/mailchimp/mc-magento2/compare/103.4.49...103.4.50)

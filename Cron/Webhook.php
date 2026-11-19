@@ -57,6 +57,18 @@ class Webhook
     protected $groups = [];
 
     /**
+     * Whether _loadGroups() has already run in this process.
+     *
+     * A flag rather than `if (!$this->groups)`: an audience that defines no
+     * interest categories legitimately loads as [], and a falsy check would
+     * read that as "not loaded yet" and re-fetch the whole tree for every
+     * webhook row that asked.
+     *
+     * @var bool
+     */
+    private $groupsLoaded = false;
+
+    /**
      * Webhook constructor.
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
      * @param \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory
@@ -87,7 +99,6 @@ class Webhook
     }
     public function processWebhooks()
     {
-        $this->_loadGroups();
         /**
          * @var $collection \Ebizmarts\MailChimp\Model\ResourceModel\MailChimpWebhookRequest\Collection
          */
@@ -258,7 +269,7 @@ class Webhook
                                 $this->_subscribeMember($subscriber, \Magento\Newsletter\Model\Subscriber::STATUS_UNSUBSCRIBED);
                             }
                         }
-                    } catch (\Mailchimp_Error $e) {
+                    } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
                         $this->_helper->log($e->getFriendlyMessage());
                     }
                 }
@@ -273,6 +284,7 @@ class Webhook
     protected function _processMerges(\Magento\Customer\Model\Customer $customer, $data)
     {
         $mapFields = $this->_helper->getMapFields($customer->getStoreId());
+        $websiteId = (int)$customer->getWebsiteId();
         foreach($data['merges'] as $key=> $value) {
             if (!empty($value)) {
                 if ($key=='GROUPINGS') {
@@ -284,19 +296,14 @@ class Webhook
                     }
                     $serializedGroups = $this->_helper->serialize($groups);
                     $subscriber = $this->_subscriberFactory->create();
-                    $subscriber->loadByCustomerId($customer->getId());
-                    $interestGroup = $this->interestGroupFactory->create();
+                    $subscriber->loadByCustomer($customer->getId(),$websiteId);
+                    // Only sync interest groups for customers who are already newsletter
+                    // subscribers. Never subscribe from a profile webhook: the customer may
+                    // be an ecommerce-only contact, and core subscribe() would add a
+                    // "Not Activated" row and send a confirmation email when double opt-in is
+                    // on, which Mailchimp then echoes back, recreating the row on every run.
                     if ($subscriber->getEmail()==$customer->getEmail()) {
-                        $interestGroup->getBySubscriberIdStoreId($subscriber->getSubscriberId(), $subscriber->getStoreId());
-                        $interestGroup->setGroupdata($serializedGroups);
-                        $interestGroup->setSubscriberId($subscriber->getSubscriberId());
-                        $interestGroup->setStoreId($subscriber->getStoreId());
-                        $interestGroup->setUpdatedAt($this->_helper->getGmtDate());
-                        $interestGroup->getResource()->save($interestGroup);
-                        $listId = $this->_helper->getGeneralList($subscriber->getStoreId());
-                    } else {
-                        $this->_subscriberFactory->create()->subscribe($customer->getEmail());
-                        $subscriber->loadByEmail($customer->getEmail());
+                        $interestGroup = $this->interestGroupFactory->create();
                         $interestGroup->getBySubscriberIdStoreId($subscriber->getSubscriberId(), $subscriber->getStoreId());
                         $interestGroup->setGroupdata($serializedGroups);
                         $interestGroup->setSubscriberId($subscriber->getSubscriberId());
@@ -340,25 +347,79 @@ class Webhook
         $subscriber->setIsStatusChanged(true);
         $subscriber->getResource()->save($subscriber);
     }
+    /**
+     * Fetch every enabled store view's interest-group tree, once per process.
+     *
+     * This used to be the first statement of processWebhooks(), which read the
+     * queue two lines later: an install with nothing to process paid the whole
+     * tree -- one `interest-categories` call per store view plus one
+     * `interests` call per category -- every five minutes, and discarded it.
+     * The single consumer is _getGroups(), reached only from a `profile`
+     * webhook carrying a GROUPINGS merge field, so it is now called from there.
+     *
+     * The flag is set before the work rather than after, so a run that throws
+     * does not re-enter this once per row. That has a consequence worth stating
+     * because it is invisible when it happens: getApi() is outside the try
+     * below, so a store view whose API construction throws takes this whole
+     * loop with it, and the flag is already set -- leaving $this->groups
+     * half-built and treated as complete for the rest of the process. Later
+     * store views never load, and _getGroups() matches against a partial tree
+     * without knowing it.
+     *
+     * That is deliberate rather than overlooked. Re-entering on failure would
+     * restore exactly the per-row amplification this method was changed to
+     * remove, and the job runs again in five minutes, so a partial load costs
+     * one cycle where a retry loop would cost a call per webhook row.
+     *
+     * @return void
+     */
     protected function _loadGroups()
     {
+        if ($this->groupsLoaded) {
+            return;
+        }
+        $this->groupsLoaded = true;
+
         foreach ($this->storeManager->getStores() as $storeId => $val) {
             if (!$this->_helper->isMailChimpEnabled($storeId)) {
                 continue;
             }
+            // One answer per credential is enough. This loop no longer runs
+            // unless a row actually needs the groups, but when it does run a
+            // dead key would still cost one rejected call per store view.
+            if ($this->_helper->isApiKeyFailed($storeId)) {
+                continue;
+            }
             $listId =$this->_helper->getDefaultList($storeId);
-            $api = $this->_helper->getApi($storeId);
-            $interestsCat = $api->lists->interestCategory->getAll($listId, null, null, 200);
-            if (isset($interestsCat['categories'])) {
-                foreach ($interestsCat['categories'] as $cat) {
-                    $interests = $api->lists->interestCategory->interests->getAll($listId, $cat['id'], null, null, 200);
-                    $this->groups = array_merge_recursive($this->groups, $interests['interests']);
+            if (!$listId||$listId==-1) {
+                $this->_helper->log("ListId [$listId] is invalid for Store [$storeId]");
+                continue;
+            } else {
+                $api = $this->_helper->getApi($storeId);
+                try {
+                    $interestsCat = $api->lists->interestCategory->getAll($listId, null, null, 200);
+                    if (isset($interestsCat['categories'])) {
+                        foreach ($interestsCat['categories'] as $cat) {
+                            $interests = $api->lists->interestCategory->interests->getAll($listId, $cat['id'], null, null, 200);
+                            $this->groups = array_merge_recursive($this->groups, $interests['interests']);
+                        }
+                    }
+                } catch (\Mailchimp_Error $e) {
+                    // Read, but deliberately not recorded. This call carries an
+                    // audience id, so a failure here can mean the audience is
+                    // wrong while the credential is perfectly good -- which is a
+                    // shape that exists in the field. The verdict is left to the
+                    // account call in the ecommerce job.
+                    $error = $e->getMessage();
+                    $this->_helper->log("Error: [$error] for store [$storeId]");
                 }
             }
         }
     }
     protected function _getGroups($groups, $cat)
     {
+        $this->_loadGroups();
+
         $rc = [];
         $gr = explode(",",$groups);
         foreach ($gr as $g) {

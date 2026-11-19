@@ -44,7 +44,7 @@ class Get extends Action
         \Ebizmarts\MailChimp\Helper\Data $helper,
         \Magento\Framework\Encryption\Encryptor $encryptor
     ) {
-    
+
         parent::__construct($context);
         $this->_resultFactory       = $context->getResultFactory();
         $this->_helper                  = $helper;
@@ -57,12 +57,28 @@ class Get extends Action
         $result = [];
         try {
             $api = $this->_helper->getApiByApiKey($apiKey);
-            $lists = $api->lists->getLists(null, null, null, self::MAX_LISTS);
+            // `total_contacts` is returned only when include_total_contacts is
+            // set, and the collection carries each audience's stats, so this is
+            // the one response that can describe every audience an account has
+            // rather than the one a store view happens to point at.
+            $lists = $api->lists->getLists(
+                null,
+                null,
+                null,
+                self::MAX_LISTS,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true
+            );
             foreach ($lists['lists'] as $list) {
                 $result['lists'][] = ['id' => $list['id'], 'name' => $list['name']];
             }
             $result['valid'] = 1;
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $result['valid'] = 0;
             $result['errormsg'] = $e->getTitle();
             $this->_helper->log($e->getFriendlyMessage());

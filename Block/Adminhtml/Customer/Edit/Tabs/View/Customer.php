@@ -12,6 +12,7 @@
  */
 
 namespace Ebizmarts\MailChimp\Block\Adminhtml\Customer\Edit\Tabs\View;
+use Magento\Store\Model\StoreManagerInterface;
 
 class Customer extends \Magento\Backend\Block\Template
 {
@@ -25,37 +26,44 @@ class Customer extends \Magento\Backend\Block\Template
     protected $subscriberFactory;
 
     /**
-     * @var \Magento\Framework\Registry
+     * @var \Magento\Backend\Model\Session
      */
-    protected $registry;
+    protected $session;
+    /**
+     * @var StoreManagerInterface
+     */
+    private $storeManager;
 
     /**
-     * Customer constructor.
      * @param \Magento\Backend\Block\Template\Context $context
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
      * @param \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory
-     * @param \Magento\Framework\Registry $registry
+     * @param StoreManagerInterface $storeManager
      * @param array $data
      */
     public function __construct(
         \Magento\Backend\Block\Template\Context $context,
         \Ebizmarts\MailChimp\Helper\Data $helper,
         \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory,
-        \Magento\Framework\Registry $registry,
+        StoreManagerInterface $storeManager,
         array $data
     ) {
-    
+
         parent::__construct($context, $data);
         $this->helper               = $helper;
         $this->subscriberFactory    = $subscriberFactory;
-        $this->registry             = $registry;
+        $this->session =$context->getBackendSession();
+        $this->storeManager         = $storeManager;
     }
 
     public function getInterest()
     {
         $subscriber = $this->subscriberFactory->create();
-        $customerId = $this->registry->registry(\Magento\Customer\Controller\RegistryConstants::CURRENT_CUSTOMER_ID);
-        $subscriber->loadByCustomerId($customerId);
+        $customerData = $this->session->getCustomerData();
+        $email = $customerData['account']['email'];
+        $storeId = $customerData['account']['store_id'];
+        $websiteId = (int)$this->storeManager->getStore($storeId)->getWebsiteId();
+        $subscriber->loadBySubscriberEmail($email,$websiteId);
         return $this->helper->getSubscriberInterest($subscriber->getSubscriberId(), $subscriber->getStoreId());
     }
 }

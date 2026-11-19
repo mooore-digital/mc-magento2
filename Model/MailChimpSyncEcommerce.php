@@ -31,6 +31,11 @@ class MailChimpSyncEcommerce extends \Magento\Framework\Model\AbstractModel
         $this->getResource()->markAllAsDeleted($this, $id, $type, $relatedDeletedId);
         return $this;
     }
+    public function markEcommorceAsNotDeleted($id, $type)
+    {
+        $this->getResource()->markEcommorceAsNotDeleted($this, $id, $type);
+        return $this;
+    }
     public function markAllAsModified($id, $type)
     {
         $this->getResource()->markAllAsModified($this, $id, $type);
@@ -41,9 +46,18 @@ class MailChimpSyncEcommerce extends \Magento\Framework\Model\AbstractModel
         $this->getResource()->deleteAllByIdType($this, $id, $type, $mailchimpStoreId);
         return $this;
     }
+    public function markAllAsModifiedByBatchId($batchId)
+    {
+        $this->getResource()->markAllAsModifiedByBatchId($this, $batchId);
+        return $this;
+    }
     public function deleteAllByBatchid($batchId)
     {
         $this->getResource()->deleteAllByBatchid($this, $batchId);
+    }
+    public function deleteByTypeAndId($type, $id, $mailchimpStoreId)
+    {
+        $this->getResource()->deleteByTypeAndId($this, $type, $id, $mailchimpStoreId);
     }
     public function markAllAsModifiedByIds($mailchimpStoreId, $ids, $type)
     {

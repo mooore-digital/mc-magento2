@@ -13,6 +13,7 @@
 namespace Ebizmarts\MailChimp\Model\Api;
 
 use Symfony\Component\Config\Definition\Exception\Exception;
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
 
 class Cart
 {
@@ -57,10 +58,14 @@ class Cart
      * @var \Magento\Framework\Url
      */
     protected $_urlHelper;
+    /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
 
     /**
-     * Cart constructor.
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param SyncHelper $syncHelper
      * @param \Magento\Quote\Model\ResourceModel\Quote\CollectionFactory $quoteColletcion
      * @param \Magento\Customer\Model\CustomerFactory $customerFactory
      * @param Product $apiProduct
@@ -71,6 +76,7 @@ class Cart
      */
     public function __construct(
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        SyncHelper $syncHelper,
         \Magento\Quote\Model\ResourceModel\Quote\CollectionFactory $quoteColletcion,
         \Magento\Customer\Model\CustomerFactory $customerFactory,
         \Ebizmarts\MailChimp\Model\Api\Product $apiProduct,
@@ -79,7 +85,7 @@ class Cart
         \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orderCollectionFactory,
         \Magento\Framework\Url $urlHelper
     ) {
-    
+
         $this->_helper                  = $helper;
         $this->_quoteCollection         = $quoteColletcion;
         $this->_customerFactory         = $customerFactory;
@@ -88,6 +94,7 @@ class Cart
         $this->_orderCollectionFactory  = $orderCollectionFactory;
         $this->_countryFactory          = $countryFactory;
         $this->_urlHelper               = $urlHelper;
+        $this->syncHelper               = $syncHelper;
     }
 
         /**
@@ -115,8 +122,8 @@ class Cart
             $magentoStoreId
         );
         if (!$this->_firstDate) {
-            $this->_firstDate = $this->_helper->getConfigValue(
-                \Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC . "/$mailchimpStoreId",
+            $this->_firstDate = $this->_helper->getMCMinSyncDateFlagByMailchimpStore(
+                $mailchimpStoreId,
                 0,
                 'default'
             );
@@ -509,14 +516,11 @@ class Cart
      */
     protected function _makeCart(\Magento\Quote\Model\Quote $cart, $mailchimpStoreId, $magentoStoreId)
     {
-        $campaignId = $cart->getMailchimpCampaignId();
         $oneCart = [];
         $oneCart['id'] = $cart->getEntityId();
         $oneCart['customer'] = $this->_getCustomer($cart, $mailchimpStoreId, $magentoStoreId);
-        if ($campaignId) {
-            $oneCart['campaign_id'] = $campaignId;
-        }
-
+        // No campaign_id: Mailchimp performs order/revenue attribution internally,
+        // so sending one would override it.
         $oneCart['checkout_url'] = $this->_getCheckoutUrl($cart, $magentoStoreId);
         $oneCart['currency_code'] = $cart->getQuoteCurrencyCode();
         $oneCart['order_total'] = $cart->getGrandTotal();
@@ -530,10 +534,6 @@ class Cart
          */
         foreach ($items as $item) {
             $line = [];
-            if ($item->getProductType()=='bundle' || $item->getProductType()=='grouped') {
-                continue;
-            }
-
             if ($item->getProductType()==\Magento\ConfigurableProduct\Model\Product\Type\Configurable::TYPE_CODE) {
                 $variant = null;
                 if ($item->getOptionByCode('simple_product')) {
@@ -545,6 +545,29 @@ class Cart
                 }
 
                 $variantId = $variant->getId();
+            } elseif ($item->getProductType() == \Magento\Bundle\Model\Product\Type::TYPE_CODE) {
+                $itemCount++;
+                $lines[] = [
+                    "id" => (string)$itemCount,
+                    "product_id" => $item->getProductId(),
+                    "product_variant_id" => $item->getProductId().'-min',
+                    "quantity" => (int)$item->getQtyOrdered(),
+                    "price" => 0
+                ];
+                $bundleProducts = $cart->getAllItems();
+                foreach ($bundleProducts as $bundleProduct) {
+                    if ($bundleProduct->getParentItemId() == $item->getItemId()) {
+                        $itemCount++;
+                        $lines[] = [
+                            "id" => (string)$itemCount,
+                            "product_id" => $bundleProduct-> getProductId(),
+                            "product_variant_id" => $bundleProduct-> getProductId(),
+                            "quantity" => (int)$bundleProduct->getQtyOrdered(),
+                            "price" => $bundleProduct->getPrice()
+                        ];
+                    }
+                }
+                continue;
             } else {
                 $variantId = $item->getProductId();
             }
@@ -643,12 +666,6 @@ class Cart
                 $customer['address'] = $address;
             }
         }
-
-        //company
-//        if ($billingAddress->getCompany()) {
-//            $customer["company"] = $billingAddress->getCompany();
-//        }
-
         return $customer;
     }
 
@@ -684,7 +701,7 @@ class Cart
         $sync_modified = null,
         $sync_deleted = null
     ) {
-        $this->_helper->saveEcommerceData(
+        $this->syncHelper->saveEcommerceData(
             $storeId,
             $entityId,
             \Ebizmarts\MailChimp\Helper\Data::IS_QUOTE,

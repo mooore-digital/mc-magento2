@@ -17,7 +17,6 @@ use \Magento\Customer\Model\ResourceModel\CustomerRepository;
 use \Magento\Customer\Model\Session;
 use \Magento\Store\Model\StoreManagerInterface;
 
-
 class SubscriptionManager
 {
     /**
@@ -73,8 +72,8 @@ class SubscriptionManager
         $storeId
     ) {
         if ($this->_helper->isMailChimpEnabled($storeId)) {
-
-            $subscriber = $this->_subscriberFactory->create()->loadByCustomerId($customerId);
+            $websiteId = (int)$this->_storeManager->getStore($storeId)->getWebsiteId();
+            $subscriber = $this->_subscriberFactory->create()->loadByCustomer($customerId, $websiteId);
             if ($subscriber->isSubscribed()) {
                 $api = $this->_helper->getApi($storeId);
                 try {
@@ -85,7 +84,7 @@ class SubscriptionManager
                         null,
                         'unsubscribed'
                     );
-                } catch (\Mailchimp_Error $e) {
+                } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
                     $this->_helper->log($e->getFriendlyMessage());
                 }
             }
@@ -106,8 +105,8 @@ class SubscriptionManager
         $storeId
     ) {
         if ($this->_helper->isMailChimpEnabled($storeId)) {
-
-            $subscriber = $this->_subscriberFactory->create()->loadByCustomerId($customerId);
+            $websiteId = (int)$this->_storeManager->getStore($storeId)->getWebsiteId();
+            $subscriber = $this->_subscriberFactory->create()->loadByCustomer($customerId, $websiteId);
             if (!$subscriber->isSubscribed()) {
                 if (!$this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_MAGENTO_MAIL, $storeId)) {
                     $subscriber->setImportMode(true);
@@ -137,7 +136,7 @@ class SubscriptionManager
                             $email,
                             $status
                         );
-                    } catch (\Mailchimp_Error $e) {
+                    } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
                         $this->_helper->log($e->getFriendlyMessage());
                     }
                 }
@@ -186,7 +185,7 @@ class SubscriptionManager
                         $email,
                         $status
                     );
-                } catch (\Mailchimp_Error $e) {
+                } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
                     $this->_helper->log($e->getFriendlyMessage());
                 }
             }
@@ -194,31 +193,4 @@ class SubscriptionManager
         return [$email, $storeId];
     }
 
-    /**
-     * @param \Magento\Newsletter\Model\Subscriber $subscriber
-     * @return null
-     * @throws \Magento\Framework\Exception\LocalizedException
-     */
-    public function beforeUnsubscribe(
-        \Magento\Newsletter\Model\SubscriptionManager $subscriptionManager,
-        $email,
-        $storeId,
-        $confirmCode
-    ) {
-        if ($this->_helper->isMailChimpEnabled($storeId)) {
-            $api = $this->_helper->getApi($storeId);
-            try {
-                $md5HashEmail = hash('md5', strtolower($email));
-                $api->lists->members->update(
-                    $this->_helper->getDefaultList($storeId),
-                    $md5HashEmail,
-                    null,
-                    'unsubscribed'
-                );
-            } catch (\Mailchimp_Error $e) {
-                $this->_helper->log($e->getFriendlyMessage());
-            }
-        }
-        return [$email,$storeId,$confirmCode];
-    }
  }

@@ -13,6 +13,9 @@
 
 namespace Ebizmarts\MailChimp\Block;
 
+use Magento\Framework\Exception\NoSuchEntityException;
+use Magento\Customer\Api\CustomerRepositoryInterface;
+
 class Newsletter extends \Magento\Framework\View\Element\Template
 {
     /**
@@ -27,13 +30,17 @@ class Newsletter extends \Magento\Framework\View\Element\Template
      * @var \Magento\Customer\Model\Session
      */
     protected $customerSession;
+    /**
+     * @var CustomerRepositoryInterface
+     */
+    private $customerRepository;
 
     /**
-     * Newsletter constructor.
      * @param \Magento\Framework\View\Element\Template\Context $context
      * @param \Magento\Customer\Model\Session $customerSession
      * @param \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param CustomerRepositoryInterface $customerRepository
      * @param array $data
      */
     public function __construct(
@@ -41,24 +48,41 @@ class Newsletter extends \Magento\Framework\View\Element\Template
         \Magento\Customer\Model\Session $customerSession,
         \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory,
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        CustomerRepositoryInterface $customerRepository,
         array $data
     ) {
-    
         parent::__construct($context, $data);
         $this->_helper  = $helper;
         $this->subscriberFactory = $subscriberFactory;
         $this->customerSession = $customerSession;
+        $this->customerRepository = $customerRepository;
     }
 
     public function getInterest()
     {
+        $customer = $this->getCurrentCustomer();
         $subscriber = $this->subscriberFactory->create();
-        $subscriber->loadByCustomerId($this->customerSession->getCustomerId());
-//        $subscriber = $this->getSubscriptionObject();
+        $websiteId = $customer->getWebsiteId();
+        $subscriber->loadByCustomer($customer->getId(),$websiteId);
         return $this->_helper->getSubscriberInterest($subscriber->getSubscriberId(), $subscriber->getStoreId());
     }
     public function getFormUrl()
     {
         return  $this->getUrl('mailchimp/accountmanage/save');
+    }
+    private function getCurrentCustomer()
+    {
+        $customerId = $this->getCurrentCustomerId();
+        try {
+            $customer = $this->customerRepository->getById($customerId);
+        } catch (NoSuchEntityException $e) {
+            return null;
+        }
+
+        return $customer;
+    }
+    private function getCurrentCustomerId(): int
+    {
+        return $this->customerSession->getCustomerId();
     }
 }
