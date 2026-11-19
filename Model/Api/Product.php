@@ -12,9 +12,15 @@ mc-magento2 Magento Component
 
 namespace Ebizmarts\MailChimp\Model\Api;
 
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
+use Magento\Framework\Exception\NoSuchEntityException;
+use Magento\Bundle\Model\Product\Type as ProductTypeBundle;
+
+
 class Product
 {
     const DOWNLOADABLE = 'downloadable';
+    const GROUPED = 'grouped';
     const PRODUCTIMAGE = 'product_small_image';
     const MAX = 100;
 
@@ -69,54 +75,73 @@ class Product
      * @var \Magento\Catalog\Model\ResourceModel\Category\CollectionFactory
      */
     protected $_categoryCollection;
+    /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
     protected $includingTaxes;
+    /**
+     * @var \Ebizmarts\MailChimp\Model\ResourceModel\MailChimpSyncEcommerce\CollectionFactory
+     */
+    private $_chimpSyncEcommerceCollection;
+    /**
+     * @var ProductTypeBundle
+     */
+    private $_productTypeBundle;
 
     /**
-     * Product constructor.
      * @param \Magento\Catalog\Model\ResourceModel\Product\CollectionFactory $productCollection
      * @param \Magento\Catalog\Model\ProductRepository $productRepository
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param SyncHelper $syncHelper
      * @param \Magento\Catalog\Helper\Image $imageHelper
      * @param \Magento\CatalogInventory\Api\StockRegistryInterface $stockRegistry
      * @param \Magento\Catalog\Model\CategoryRepository $categoryRepository
      * @param \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerceFactory $chimpSyncEcommerce
+     * @param \Ebizmarts\MailChimp\Model\ResourceModel\MailChimpSyncEcommerce\CollectionFactory $chimpSyncEcommerceCollection
      * @param \Magento\ConfigurableProduct\Model\Product\Type\Configurable $configurable
      * @param \Magento\Catalog\Model\ResourceModel\Category\CollectionFactory $categoryCollection
      * @param \Magento\Catalog\Helper\Data $taxHelper
      * @param \Magento\Catalog\Model\Product\Option $option
+     * @param ProductTypeBundle $productTypeBundle
      */
     public function __construct(
         \Magento\Catalog\Model\ResourceModel\Product\CollectionFactory $productCollection,
         \Magento\Catalog\Model\ProductRepository $productRepository,
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        SyncHelper $syncHelper,
         \Magento\Catalog\Helper\Image $imageHelper,
         \Magento\CatalogInventory\Api\StockRegistryInterface $stockRegistry,
         \Magento\Catalog\Model\CategoryRepository $categoryRepository,
         \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerceFactory $chimpSyncEcommerce,
+        \Ebizmarts\MailChimp\Model\ResourceModel\MailChimpSyncEcommerce\CollectionFactory $chimpSyncEcommerceCollection,
         \Magento\ConfigurableProduct\Model\Product\Type\Configurable $configurable,
         \Magento\Catalog\Model\ResourceModel\Category\CollectionFactory $categoryCollection,
         \Magento\Catalog\Helper\Data $taxHelper,
-        \Magento\Catalog\Model\Product\Option $option
+        \Magento\Catalog\Model\Product\Option $option,
+        ProductTypeBundle $productTypeBundle
     ) {
 
         $this->_productRepository   = $productRepository;
         $this->_helper              = $helper;
+        $this->syncHelper           = $syncHelper;
         $this->_productCollection   = $productCollection;
         $this->_imageHelper         = $imageHelper;
         $this->_stockRegistry       = $stockRegistry;
         $this->_categoryRepository  = $categoryRepository;
         $this->_chimpSyncEcommerce  = $chimpSyncEcommerce;
+        $this->_chimpSyncEcommerceCollection = $chimpSyncEcommerceCollection;
         $this->_configurable        = $configurable;
         $this->_option              = $option;
         $this->_categoryCollection  = $categoryCollection;
         $this->taxHelper            = $taxHelper;
+        $this->_productTypeBundle   = $productTypeBundle;
         $this->_batchId             = \Ebizmarts\MailChimp\Helper\Data::IS_PRODUCT. '_' .
             $this->_helper->getGmtTimeStamp();
     }
     public function _sendProducts($magentoStoreId)
     {
         $batchArray = [];
-        $counter = 0;
         $mailchimpStoreId = $this->_helper->getConfigValue(
             \Ebizmarts\MailChimp\Helper\Data::XML_MAILCHIMP_STORE,
             $magentoStoreId
@@ -125,9 +150,12 @@ class Product
             \Ebizmarts\MailChimp\Helper\Data::XML_INCLUDING_TAXES,
             $magentoStoreId
         );
+        $syncSalable = $this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_SYNC_SALABLE, $magentoStoreId);
         $this->_markSpecialPrices($magentoStoreId, $mailchimpStoreId);
+        $batchArray = array_merge($batchArray,$this->processDeletedProducts($magentoStoreId, $mailchimpStoreId));
         $collection = $this->_getCollection();
-        $collection->addFieldToFilter("type_id", ["nin"=>[\Magento\Catalog\Model\Product\Type::TYPE_BUNDLE, "grouped"]]);
+//        $collection->addFieldToFilter("type_id", ["nin"=>[\Magento\Catalog\Model\Product\Type::TYPE_BUNDLE, "grouped"]]);
+        $collection->addFieldToFilter("type_id", ["neq"=>self::GROUPED]);
         $collection->addStoreFilter($magentoStoreId);
         $collection->getSelect()->reset(\Magento\Framework\DB\Select::COLUMNS)->columns(['entity_id']);
         $collection->getSelect()->joinLeft(
@@ -136,32 +164,54 @@ class Product
             "' and m4m.mailchimp_store_id = '".$mailchimpStoreId."'",
             ['m4m.*']
         );
-        $collection->getSelect()->where("m4m.mailchimp_sync_delta IS null OR (m4m.mailchimp_sync_delta > '".
-            $this->_helper->getMCMinSyncDateFlag().
-            "' and m4m.mailchimp_sync_modified = 1)");
+        $collection->getSelect()->where("m4m.mailchimp_sync_delta IS null OR m4m.mailchimp_sync_modified = 1");
         $collection->getSelect()->limit(self::MAX);
         foreach ($collection as $item) {
             /**
              * @var $product \Magento\Catalog\Model\Product
              */
             $product = $this->_productRepository->getById($item->getId(), false, $magentoStoreId);
-            if ($item->getMailchimpSyncModified() && $item->getMailchimpSyncDelta() &&
-                $item->getMailchimpSyncDelta() > $this->_helper->getMCMinSyncDateFlag()) {
-                $batchArray = array_merge($this->_buildOldProductRequest(
-                    $product,
-                    $this->_batchId,
-                    $mailchimpStoreId,
-                    $magentoStoreId
-                ), $batchArray);
-                $this->_updateProduct($mailchimpStoreId, $product->getId());
+
+            if ($item->getMailchimpSyncModified() && $item->getMailchimpSyncDelta()) {
+                if ($product->isSalable() || $syncSalable) {
+                    if (!$item->getMailchimpSyncDeleted()) {
+                        $batchArray = array_merge($this->_buildOldProductRequest(
+                            $product,
+                            $this->_batchId,
+                            $mailchimpStoreId,
+                            $magentoStoreId
+                        ), $batchArray);
+                        $this->_updateProduct($mailchimpStoreId, $product->getId());
+                    } else {
+                        $data = array_merge($this->_buildNewProductRequest($product, $mailchimpStoreId, $magentoStoreId), $batchArray);
+                        $batchArray[] = $data;
+                        $this->syncHelper->markEcommorceAsNotDeleted($product->getId(), \Ebizmarts\MailChimp\Helper\Data::IS_PRODUCT);
+                        continue;
+                    }
+                } else {
+                    $productId = $product->getId();
+                    $batchArray[] = $this->deleteProduct($mailchimpStoreId, $productId,"Product not salable");
+                }
                 continue;
             } else {
-                $data = $this->_buildNewProductRequest($product, $mailchimpStoreId, $magentoStoreId);
+                if ($product->isSalable() || $syncSalable) {
+                    $data = $this->_buildNewProductRequest($product, $mailchimpStoreId, $magentoStoreId);
+                } else {
+                    $this->_updateProduct(
+                        $mailchimpStoreId,
+                        $product->getId(),
+                        $this->_helper->getGmtDate(),
+                        "This product is not salable.",
+                        0,
+                        false,
+                        true,
+                        true
+                    );
+                    continue;
+                }
             }
             if (!empty($data)) {
-                $batchArray[$counter] = $data;
-                $counter++;
-
+                $batchArray[] = $data;
                 //update product delta
                 $this->_updateProduct($mailchimpStoreId, $product->getId());
             } else {
@@ -178,62 +228,134 @@ class Product
     }
     protected function _markSpecialPrices($magentoStoreId, $mailchimpStoreId)
     {
+        $syncTable = $this->_helper->getTableName('mailchimp_sync_ecommerce');
+
         /**
-         * get the products with current special price that are not synced and mark it as modified
+         * Products with an active special price whose sync delta is older than
+         * special_from_date (i.e. they need to be re-synced).
+         *
+         * Optimisations vs. the previous implementation:
+         *  - addAttributeToSelect limits EAV joins to only the two date columns
+         *    we actually compare, instead of loading every product attribute.
+         *  - A LEFT JOIN against mailchimp_sync_ecommerce combined with a WHERE
+         *    condition replaces the per-row getChimpSyncEcommerce() call,
+         *    eliminating the N+1 query pattern.
          */
         $collection = $this->_getCollection();
         $collection->addStoreFilter($magentoStoreId);
+        $collection->addAttributeToSelect(['special_from_date', 'special_to_date']);
         $collection->addAttributeToFilter(
             'special_price',
-            ['gt'=>0],
+            ['gt' => 0],
             'left'
         )->addAttributeToFilter(
             'special_from_date',
-            ['or' => [ 0 => ['date' => true,
-                'to' => date('Y-m-d', time()).' 23:59:59'],
-                1 => ['is' => new \Zend_Db_Expr(
-                    'null'
-                )],]],
+            ['or' => [
+                0 => ['date' => true, 'to' => date('Y-m-d', time()) . ' 23:59:59'],
+                1 => ['is' => new \Zend_Db_Expr('null')],
+            ]],
             'left'
         )->addAttributeToFilter(
             'special_to_date',
-            ['or' => [ 0 => ['date' => true,
-                'from' => date('Y-m-d', time()).' 00:00:00'],
-                1 => ['is' => new \Zend_Db_Expr(
-                    'null'
-                )],]],
-            'left'
-        );
-        foreach ($collection as $item) {
-            $productId = $this->_productRepository->get($item->getSku(),false, $magentoStoreId)->getId();
-            $mailchimpSync = $this->_helper->getChimpSyncEcommerce($mailchimpStoreId, $productId, 'PRO');
-            if ($mailchimpSync->getMailchimpSyncDelta() < $item->getSpecialFromDate()) {
-                $this->_updateProduct($mailchimpStoreId, $productId, null, null, 1);
-            }
-        }
-        /**
-         * get the products that was synced when it have special price and have no more special price
-         */
-        $collection2 = $this->_getCollection();
-        $collection2->addStoreFilter($magentoStoreId);
-        $collection2->addAttributeToFilter(
-            'special_price',
-            ['gt'=>0],
-            'left'
-        )->addAttributeToFilter(
-            'special_to_date',
-            ['or' => [ 0 => ['date' => true,
-                'to' => date('Y-m-d', time()).' 00:00:00'],
+            ['or' => [
+                0 => ['date' => true, 'from' => date('Y-m-d', time()) . ' 00:00:00'],
+                1 => ['is' => new \Zend_Db_Expr('null')],
             ]],
             'left'
         );
+        $collection->getSelect()->joinLeft(
+            ['m4m_sp' => $syncTable],
+            "m4m_sp.related_id = e.entity_id"
+            . " AND m4m_sp.type = '" . \Ebizmarts\MailChimp\Helper\Data::IS_PRODUCT . "'"
+            . " AND m4m_sp.mailchimp_store_id = '" . $mailchimpStoreId . "'",
+            ['m4m_sp.mailchimp_sync_delta']
+        );
+        $collection->getSelect()->where(
+            'm4m_sp.mailchimp_sync_delta IS NULL'
+            . ' OR m4m_sp.mailchimp_sync_delta < at_special_from_date.value'
+        );
+        foreach ($collection as $item) {
+            $this->_updateProduct($mailchimpStoreId, $item->getId(), null, null, 1);
+        }
+
+        /**
+         * Products whose special price expired yesterday — need re-sync to
+         * reflect the removal of the discount.
+         */
+        $collection2 = $this->_getCollection();
+        $collection2->addStoreFilter($magentoStoreId);
+        $collection2->addAttributeToSelect(['special_to_date']);
+        $collection2->addAttributeToFilter(
+            'special_price',
+            ['gt' => 0],
+            'left'
+        )->addAttributeToFilter(
+            'special_to_date',
+            ['or' => [
+                0 => ['date' => true, 'to' => date('Y-m-d', time()) . ' 00:00:00'],
+            ]],
+            'left'
+        )->addAttributeToFilter(
+            'special_to_date',
+            ['or' => [
+                0 => ['date' => true, 'from' => date('Y-m-d', strtotime('-1 day')) . ' 00:00:00'],
+            ]],
+            'left'
+        );
+        $collection2->getSelect()->joinLeft(
+            ['m4m_sp2' => $syncTable],
+            "m4m_sp2.related_id = e.entity_id"
+            . " AND m4m_sp2.type = '" . \Ebizmarts\MailChimp\Helper\Data::IS_PRODUCT . "'"
+            . " AND m4m_sp2.mailchimp_store_id = '" . $mailchimpStoreId . "'",
+            ['m4m_sp2.mailchimp_sync_delta']
+        );
+        $collection2->getSelect()->where(
+            'm4m_sp2.mailchimp_sync_delta IS NULL'
+            . ' OR m4m_sp2.mailchimp_sync_delta < at_special_to_date.value'
+        );
         foreach ($collection2 as $item) {
-            $productId = $this->_productRepository->get($item->getSku(),false, $magentoStoreId)->getId();
-            $mailchimpSync = $this->_helper->getChimpSyncEcommerce($mailchimpStoreId, $productId, 'PRO');
-            if ($mailchimpSync->getMailchimpSyncDelta() < $item->getSpecialToDate()) {
-                $this->_updateProduct($mailchimpStoreId, $productId, null, null, 1);
+            $this->_updateProduct($mailchimpStoreId, $item->getId(), null, null, 1);
+        }
+    }
+    protected function processDeletedProducts($magentoStoreId, $mailchimpStoreId)
+    {
+        $deletedData = [];
+        $collection = $this->_getMailchimpCollection();
+        $collection->getSelect()->where(
+            "main_table.mailchimp_sync_deleted = 1 ".
+            " and main_table.type = '".\Ebizmarts\MailChimp\Helper\Data::IS_PRODUCT."'".
+            " and main_table.mailchimp_store_id = '".$mailchimpStoreId."'".
+            " and main_table.mailchimp_sent = ".\Ebizmarts\Mailchimp\Helper\Data::NEEDTORESYNC
+        );
+        $collection->getSelect()->limit(self::MAX);
+        foreach ($collection as $item) {
+           try {
+                $product = $this->_productRepository->getById($item->getRelatedId(), false, $magentoStoreId);
+            } catch (NoSuchEntityException $e) {
+                $productId = $item->getRelatedId();
+                $deletedData[] = $this->deleteProduct($mailchimpStoreId, $productId, "Deleted product");
             }
         }
+        return $deletedData;
+    }
+    protected function deleteProduct($mailchimpStoreId, $productId, $error)
+    {
+        $data = [];
+        $data['method'] = "DELETE";
+        $data['path'] = "/ecommerce/stores/$mailchimpStoreId/products/$productId";
+        $data['operation_id'] = $this->_batchId . '_' . $productId;
+        $data['body'] = "";
+        $this->_updateProduct(
+            $mailchimpStoreId,
+            $productId,
+            $this->_helper->getGmtDate(),
+            $error,
+            0,
+            null,
+            true
+        );
+        $this->_helper->modifyCounter(\Ebizmarts\MailChimp\Helper\Data::PRO_DELETED);
+        return $data;
     }
     /**
      * @return \Magento\Catalog\Model\ResourceModel\Product\Collection
@@ -241,6 +363,10 @@ class Product
     protected function _getCollection()
     {
         return $this->_productCollection->create();
+    }
+    protected function _getMailchimpCollection()
+    {
+        return $this->_chimpSyncEcommerceCollection->create();
     }
     protected function _buildNewProductRequest(
         \Magento\Catalog\Model\Product $product,
@@ -263,9 +389,8 @@ class Product
                 }
                 break;
             case \Magento\Catalog\Model\Product\Type::TYPE_VIRTUAL:
-                $variantProducts[] = $product;
-                break;
             case self::DOWNLOADABLE:
+            case \Magento\Catalog\Model\Product\Type::TYPE_BUNDLE:
                 $variantProducts[] = $product;
                 break;
             default:
@@ -301,12 +426,10 @@ class Product
         $variantProducts = [];
         if ($product->getTypeId() == \Magento\Catalog\Model\Product\Type::TYPE_SIMPLE ||
             $product->getTypeId() == \Magento\Catalog\Model\Product\Type::TYPE_VIRTUAL ||
-            $product->getTypeId() == "downloadable") {
+            $product->getTypeId() == self::DOWNLOADABLE) {
             $data = $this-> _buildProductData($product, $magentoStoreId);
             $variantProducts [] = $product;
-            // $parentIds = $product->getTypeInstance()->getParentIdsByChild($product->getId());
             $parentIds = $this->_configurable->getParentIdsByChild($product->getId());
-
             //add or update variant
             foreach ($parentIds as $parentId) {
                 $productSync = $this->_chimpSyncEcommerce->create()->getByStoreIdType(
@@ -341,6 +464,26 @@ class Product
                     $operations[] = $productdata;
                 }
             }
+            $bundleParentIds = $this->_productTypeBundle->getParentIdsByChild($product->getId());
+            foreach ($bundleParentIds as $bundleParentId) {
+                $bundleProduct = $this->_productRepository->getById($bundleParentId, false, $magentoStoreId);
+                $data = $this-> _buildProductData($bundleProduct, $magentoStoreId,false);
+                $body = json_encode($data);
+                if ($body===false) {
+                    $jsonErrorMsg = json_last_error_msg();
+                    $this->_helper->log("");
+                    $this->_helper->log("$jsonErrorMsg for product [".$bundleProduct->getId()."]");
+                    continue;
+                }
+                $productdata = [];
+                $productdata['method'] = "PATCH";
+                $productdata['path'] = "/ecommerce/stores/" . $mailchimpStoreId . "/products/" . $bundleParentId;
+                $productdata['operation_id'] = $batchId . '_' . $bundleParentId;
+                $productdata['body'] = $body;
+                $operations[] = $productdata;
+                $this->_helper->modifyCounter(\Ebizmarts\MailChimp\Helper\Data::PRO_MOD);
+            }
+
         } elseif ($product->getTypeId() == \Magento\ConfigurableProduct\Model\Product\Type\Configurable::TYPE_CODE) {
             $childProducts = $product->getTypeInstance()->getChildrenIds($product->getId());
             $variantProducts[] = $product;
@@ -375,7 +518,7 @@ class Product
         \Magento\Catalog\Model\Product $product,
         $magentoStoreId,
         $isVarient = true,
-        $variants = null
+        $variants = []
     ) {
 
         $data = [];
@@ -462,43 +605,48 @@ class Product
             if (!empty($data['image_url'])) {
                 $this->_parentImage = $data['image_url'];
             }
-            //variants
-            $data["variants"] = [];
-            // put the min price of the simples as the price of the parent
-            foreach ($variants as $variant) {
-                if ($variant && $variant->getId() != $product->getId()) {
-                    $variantPrice = $this->_getProductPrice($variant);
-                    if ($this->productPrice) {
-                        if ($variantPrice < $this->productPrice) {
+            if ($product->getTypeId() == \Magento\Catalog\Model\Product\Type::TYPE_BUNDLE) {
+                list($min, $max) = $this->_bundleVariants($product, $magentoStoreId);
+                $data["variants"][] = $this->_variantForBundle($product, $magentoStoreId, $min,$product->getSku().'-min',$product->getId().'-min');
+                $data["variants"][] = $this->_variantForBundle($product, $magentoStoreId, $max,$product->getSku().'-max',$product->getId().'-max');
+            } else {
+                //variants
+                $data["variants"] = [];
+                // put the min price of the simples as the price of the parent
+                foreach ($variants as $variant) {
+                    if ($variant && $variant->getId() != $product->getId()) {
+                        $variantPrice = $this->_getProductPrice($variant);
+                        if ($this->productPrice) {
+                            if ($variantPrice < $this->productPrice) {
+                                $this->productPrice = $variantPrice;
+                            }
+                        } else {
                             $this->productPrice = $variantPrice;
                         }
-                    } else {
-                        $this->productPrice = $variantPrice;
                     }
                 }
-            }
-            /**
-             * @var $variant \Magento\Catalog\Model\Product
-             */
-            foreach ($variants as $variant) {
-                if ($variant) {
-                    if ($variant->getId() != $product->getId()) {
-                        $this->productPrice = null;
+                /**
+                 * @var $variant \Magento\Catalog\Model\Product
+                 */
+                foreach ($variants as $variant) {
+                    if ($variant) {
+                        if ($variant->getId() != $product->getId()) {
+                            $this->productPrice = null;
+                        }
+                        $data["variants"][] = $this->_buildProductData($variant, $magentoStoreId);
                     }
-                    $data["variants"][] = $this->_buildProductData($variant, $magentoStoreId);
                 }
-            }
-            if ($this->_childtUrl) {
-                if ($product->getTypeId() == \Magento\Catalog\Model\Product\Type::TYPE_SIMPLE ||
-                    $product->getTypeId() == \Magento\Catalog\Model\Product\Type::TYPE_VIRTUAL ||
-                    $product->getTypeId() == "downloadable") {
-                    $data["url"] = $this->_childtUrl;
+                if ($this->_childtUrl) {
+                    if ($product->getTypeId() == \Magento\Catalog\Model\Product\Type::TYPE_SIMPLE ||
+                        $product->getTypeId() == \Magento\Catalog\Model\Product\Type::TYPE_VIRTUAL ||
+                        $product->getTypeId() == self::DOWNLOADABLE) {
+                        $data["url"] = $this->_childtUrl;
+                    }
+                    $this->_childtUrl = null;
                 }
-                $this->_childtUrl = null;
+                $this->_parentImage = null;
             }
-            $this->_parentImage = null;
         }
-
         return $data;
     }
 
@@ -564,20 +712,19 @@ class Product
                         $product->getTypeId() != \Magento\Catalog\Model\Product\Type::TYPE_SIMPLE &&
                         $product->getTypeId() != \Magento\Catalog\Model\Product\Type::TYPE_VIRTUAL &&
                         $product->getTypeId() != \Magento\ConfigurableProduct\Model\Product\Type\Configurable::TYPE_CODE &&
-                        $product->getTypeId() != "downloadable")) {
+                        $product->getTypeId() != self::DOWNLOADABLE &&
+                        $product->getTypeId() != \Magento\Catalog\Model\Product\Type::TYPE_BUNDLE)) {
                     $this->_helper->log('The product with id [' . $product->getId() .
                         '] is not supported [' . $product->getTypeId() . ']');
                     continue;
                 }
-                if ($productSyncData->getMailchimpSyncModified() &&
-                    $productSyncData->getMailchimpSyncDelta() > $this->_helper->getMCMinSyncDateFlag()) {
+                if ($productSyncData->getMailchimpSyncModified()) {
                     $data = array_merge(
                         $data,
                         $this->_buildOldProductRequest($product, $batchId, $mailchimpStoreId, $magentoStoreId)
                     );
                     $this->_updateProduct($mailchimpStoreId, $product->getId());
-                } elseif (!$productSyncData->getMailchimpSyncDelta() ||
-                    $productSyncData->getMailchimpSyncDelta() < $this->_helper->getMCMinSyncDateFlag()) {
+                } elseif (!$productSyncData->getMailchimpSyncDelta()) {
                     $data[] = $this->_buildNewProductRequest($product, $mailchimpStoreId, $magentoStoreId);
                     $this->_updateProduct($mailchimpStoreId, $product->getId());
                 }
@@ -609,22 +756,21 @@ class Product
                     $product->getTypeId() != \Magento\Catalog\Model\Product\Type::TYPE_SIMPLE &&
                     $product->getTypeId() != \Magento\Catalog\Model\Product\Type::TYPE_VIRTUAL &&
                     $product->getTypeId() != \Magento\ConfigurableProduct\Model\Product\Type\Configurable::TYPE_CODE &&
-                    $product->getTypeId() != "downloadable")) {
+                    $product->getTypeId() != self::DOWNLOADABLE &&
+                    $product->getTypeId() != \Magento\Catalog\Model\Product\Type::TYPE_BUNDLE)) {
                 $this->_helper->log(
                     'The product with id ['.$product->getId().'] is not supported ['.$product->getTypeId().']'
                 );
                 continue;
             }
 
-            if ($productSyncData->getMailchimpSyncModified() &&
-                $productSyncData->getMailchimpSyncDelta() > $this->_helper->getMCMinSyncDateFlag()) {
+            if ($productSyncData->getMailchimpSyncModified()) {
                 $data = array_merge(
                     $data,
                     $this->_buildOldProductRequest($product, $batchId, $mailchimpStoreId, $magentoStoreId)
                 );
                 $this->_updateProduct($mailchimpStoreId, $product->getId());
-            } elseif (!$productSyncData->getMailchimpSyncDelta() ||
-                $productSyncData->getMailchimpSyncDelta() < $this->_helper->getMCMinSyncDateFlag()) {
+            } elseif (!$productSyncData->getMailchimpSyncDelta()) {
                 $data[] = $this->_buildNewProductRequest($product, $mailchimpStoreId, $magentoStoreId);
                 $this->_updateProduct($mailchimpStoreId, $product->getId());
             }
@@ -652,18 +798,136 @@ class Product
         $entityId,
         $sync_delta = null,
         $sync_error = null,
-        $sync_modified = null
+        $sync_modified = null,
+        $nullifyBatchId = false,
+        $deleted = null,
+        $forcedNoWaiting = false
     ) {
-        $this->_helper->saveEcommerceData(
+        if ($forcedNoWaiting) {
+            $sent = \Ebizmarts\MailChimp\Helper\Data::SYNCED;
+        } else {
+            $sent = \Ebizmarts\MailChimp\Helper\Data::WAITINGSYNC;
+        }
+        $this->syncHelper->saveEcommerceData(
             $storeId,
             $entityId,
             \Ebizmarts\MailChimp\Helper\Data::IS_PRODUCT,
             $sync_delta,
             $sync_error,
             $sync_modified,
+            $deleted,
             null,
-            null,
-            \Ebizmarts\MailChimp\Helper\Data::WAITINGSYNC
+            $sent,
+            $nullifyBatchId
         );
+    }
+    protected function _bundleVariants($product, $magentoStoreId)
+    {
+        $productsArray = [];
+        $simpleProducts = $product->getTypeInstance(true)
+            ->getSelectionsCollection(
+                $product->getTypeInstance(true)->getOptionsIds($product),
+                $product
+            );
+        foreach ($simpleProducts as $item) {
+            $selectionArray = [];
+            $selectionArray['selection_product_name'] = $item->getName();
+            $selectionArray['selection_product_quantity'] = $item->getSelectionQty();
+            $selectionArray['selection_product_price'] = $item->getPrice();
+            $selectionArray['selection_product_id'] = $item->getProductId();
+            $productsArray[$item->getOptionId()]['item'][$item->getSelectionId()] = $selectionArray;
+        }
+        foreach ($productsArray as $key => $productItem) {
+            $min = $max = 0;
+            foreach ($productItem['item'] as $item) {
+                if ($min == 0) {
+                    $min = $item['selection_product_price']*$item['selection_product_quantity'];
+                }
+                if ($item['selection_product_price']*$item['selection_product_quantity'] < $min) {
+                    $min = $item['selection_product_price']*$item['selection_product_quantity'];
+                }
+                if ($item['selection_product_price']*$item['selection_product_quantity'] > $max) {
+                    $max = $item['selection_product_price']*$item['selection_product_quantity'];
+                }
+            }
+            $productsArray[$key]['min'] = $min;
+            $productsArray[$key]['max'] = $max;
+        }
+        $min = $max = 0;
+        foreach ($productsArray as $key => $productItem) {
+            $min += $productItem['min'];
+            $max += $productItem['max'];
+        }
+        return [$min, $max];
+    }
+    protected function _variantForBundle($product, $magentoStoreId, $price, $sku, $id)
+    {
+        $data = [];
+        $parent = null;
+
+        //data applied for both root and varient products
+        $data["id"] = $id;
+        $data["title"] = $product->getName();
+        $data["url"] = $product->getProductUrl();
+        $data["image_url"] = '';
+        if ($product->getImage() && $product->getImage()!='no_selection') {
+            $filePath = 'catalog/product/'.ltrim($product->getImage(), '/');
+            $data["image_url"] = $this->_helper->getBaserUrl(
+                    $magentoStoreId,
+                    \Magento\Framework\UrlInterface::URL_TYPE_MEDIA
+                ).$filePath;
+        } elseif ($this->_parentImage) {
+            $data['image_url'] = $this->_parentImage;
+        } else {
+            $parent = $this->_getParent($product->getId(), $magentoStoreId);
+            if ($parent && $parent->getImage() && $parent->getImage()!='no_selection') {
+                $filePath = 'catalog/product/'.ltrim($parent->getImage(), '/');
+                $data["image_url"] = $this->_helper->getBaserUrl(
+                        $magentoStoreId,
+                        \Magento\Framework\UrlInterface::URL_TYPE_MEDIA
+                    ).$filePath;
+            }
+        }
+        $data["published_at_foreign"] = "";
+        $data["sku"] = $sku;
+        if ($this->productPrice) {
+            $data['price'] = $this->productPrice;
+        } else {
+            $data['price'] = $price;
+        }
+
+        //stock
+        $stock = $this->_stockRegistry->getStockItem($product->getId(), $magentoStoreId);
+        $data["inventory_quantity"] = (int)$stock->getQty();
+        $data["backorders"] = (string)$stock->getBackorders();
+        if ($product->getVisibility() == \Magento\Catalog\Model\Product\Visibility::VISIBILITY_NOT_VISIBLE) {
+            $tailUrl = '';
+            $data["visibility"] = 'false';
+            if (!$parent) {
+                $parent = $this->_getParent($product->getId(), $magentoStoreId);
+            }
+            if ($parent) {
+                $options = $parent->getTypeInstance()->getConfigurableAttributesAsArray($parent);
+                foreach ($options as $option) {
+                    if (strlen($tailUrl)) {
+                        $tailUrl .= '&';
+                    } else {
+                        $tailUrl .= '?';
+                    }
+                    $tailUrl .= $option['attribute_code'] . "=" . $product->getData($option['attribute_code']);
+                }
+                $this->_childtUrl = $data['url'] = $parent->getProductUrl() . $tailUrl;
+                if (empty($data['image_url'])) {
+                    $filePath = 'catalog/product'.$parent->getImage();
+                    $data["image_url"] = $this->_helper->getBaserUrl(
+                            $magentoStoreId,
+                            \Magento\Framework\UrlInterface::URL_TYPE_MEDIA
+                        ).$filePath;
+                }
+            }
+        } else {
+            $data["visibility"] = 'true';
+        }
+        return $data;
     }
 }

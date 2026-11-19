@@ -128,8 +128,8 @@ class Ecommerce
         foreach ($this->_storeManager->getStores() as $storeId => $val) {
             if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ACTIVE, $storeId)) {
                 if (!$this->_ping($storeId)) {
-                    $this->_helper->log('MailChimp is not available');
-                    return;
+                    $this->_helper->log("MailChimp is not available for store $storeId, skipping");
+                    continue;
                 }
                 $this->_storeManager->setCurrentStore($storeId);
                 $listId = $this->_helper->getGeneralList($storeId);
@@ -162,40 +162,6 @@ class Ecommerce
                 }
             }
         }
-        $syncs = [];
-        foreach ($this->_storeManager->getStores() as $storeId => $val) {
-            $mailchimpStoreId = $this->_helper->getConfigValue(
-                \Ebizmarts\MailChimp\Helper\Data::XML_MAILCHIMP_STORE,
-                $storeId
-            );
-            if ($mailchimpStoreId != -1 && $mailchimpStoreId != '') {
-                $dateSync = $this->_helper->getConfigValue(
-                    \Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC,
-                    $storeId
-                );
-                if (isset($syncs[$mailchimpStoreId])) {
-                    if ($syncs[$mailchimpStoreId] && $syncs[$mailchimpStoreId]['datesync'] < $dateSync) {
-                        $syncs[$mailchimpStoreId]['datesync'] = $dateSync;
-                        $syncs[$mailchimpStoreId]['storeid'] = $storeId;
-                    }
-                } elseif ($dateSync) {
-                    $syncs[$mailchimpStoreId]['datesync'] = $dateSync;
-                    $syncs[$mailchimpStoreId]['storeid'] = $storeId;
-                } else {
-                    $syncs[$mailchimpStoreId] = false;
-                }
-            }
-        }
-        foreach ($syncs as $mailchimpStoreId => $val) {
-            if ($val && !$this->_helper->getConfigValue(
-                \Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC . "/$mailchimpStoreId",
-                0,
-                'default'
-            )
-            ) {
-                $this->updateSyncFlagData($val['storeid'], $mailchimpStoreId);
-            }
-        }
     }
 
     protected function _processStore($storeId, $mailchimpStoreId, $listId)
@@ -205,25 +171,25 @@ class Ecommerce
         $countProducts = 0;
         $countOrders = 0;
         $batchArray = [];
-        $this->_helper->resetCounters();
+        $this->_helper->resetCounters($storeId);
         $results = $this->_apiSubscribers->sendSubscribers($storeId, $listId);
         if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ECOMMERCE_ACTIVE, $storeId)) {
             $this->_helper->log('Generate Products payload');
             $products = $this->_apiProduct->_sendProducts($storeId);
             $countProducts = count($products);
             $results = array_merge($results, $products);
-
-            $this->_helper->log('Generate Customers payload');
-            $customers = $this->_apiCustomer->sendCustomers($storeId);
-            $countCustomers = count($customers);
-            $results = array_merge($results, $customers);
-
+            if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ALL_CUSTOMERS, $storeId)) {
+                $this->_helper->log('Generate Customers payload');
+                $customers = $this->_apiCustomer->sendCustomers($storeId);
+                $countCustomers = count($customers);
+                $results = array_merge($results, $customers);
+            }
             $this->_helper->log('Generate Orders payload');
             $orders = $this->_apiOrder->sendOrders($storeId);
             $countOrders = count($orders);
             $results = array_merge($results, $orders);
 
-            if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC, $storeId)) {
+            if ($this->_helper->getMCMinSyncDateFlagByMailchimpStore($mailchimpStoreId, 0, 'default')) {
                 $this->_helper->log('Generate Carts payload');
                 $carts = $this->_apiCart->createBatchJson($storeId);
                 $results = array_merge($results, $carts);
@@ -261,14 +227,16 @@ class Ecommerce
                         $syncBatches->setStatus(\Ebizmarts\MailChimp\Helper\Data::BATCH_PENDING);
                         $syncBatches->setMailchimpStoreId($mailchimpStoreId);
                         $syncBatches->setModifiedDate($this->_helper->getGmtDate());
+                        if ($this->_helper->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ALL_CUSTOMERS, $storeId)) {
+                            $syncBatches->setCustomersNewCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::CUS_NEW]);
+                            $syncBatches->setCustomersModifiedCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::CUS_MOD]);
+                        }
                         $syncBatches->setSubscribersNewCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::SUB_NEW]);
                         $syncBatches->setProductsNewCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::PRO_NEW]);
-                        $syncBatches->setCustomersNewCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::CUS_NEW]);
                         $syncBatches->setCartsNewCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::QUO_NEW]);
                         $syncBatches->setOrdersNewCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::ORD_NEW]);
                         $syncBatches->setSubscribersModifiedCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::SUB_MOD]);
                         $syncBatches->setProductsModifiedCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::PRO_MOD]);
-                        $syncBatches->setCustomersModifiedCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::CUS_MOD]);
                         $syncBatches->setCartsModifiedCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::QUO_MOD]);
                         $syncBatches->setOrdersModifiedCount($batchCounters[\Ebizmarts\MailChimp\Helper\Data::ORD_MOD]);
                         $syncBatches->getResource()->save($syncBatches);
@@ -280,7 +248,7 @@ class Ecommerce
                     $this->markWithError($BadOperations, $mailchimpStoreId, $listId);
                 }
 
-            } catch (\Mailchimp_Error $e) {
+            } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
                 $this->_helper->log($e->getFriendlyMessage());
             } catch (\Exception $e) {
                 $this->_helper->log($e->getMessage());
@@ -289,13 +257,14 @@ class Ecommerce
             $this->_helper->log("Nothing to sync for store $storeId");
         }
         $countTotal = $this->_helper->getTotalNewItemsSent();
-        $syncing = $this->_helper->getMCMinSyncing($storeId);
-        if ($countTotal == 0 && $syncing) {
-            $this->_helper->saveConfigValue(
-                \Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC,
-                date('Y-m-d'),
-                $storeId
-            );
+        // Mark the store as fully synced only once, on the first run that has
+        // nothing new left to send. updateSyncFlagData records the completion date
+        // under issync/<id> and tells Mailchimp the store is no longer syncing.
+        // This is the flag the cart sync above waits on.
+        if ($countTotal == 0
+            && !$this->_helper->getMCMinSyncDateFlagByMailchimpStore($mailchimpStoreId, 0, 'default')
+        ) {
+            $this->updateSyncFlagData($storeId, $mailchimpStoreId);
         }
 
         return $batchId;
@@ -308,8 +277,16 @@ class Ecommerce
     protected function updateSyncFlagData($storeId, $mailchimpStoreId)
     {
         $this->apiUpdateSyncFlag($storeId, $mailchimpStoreId);
-        $this->_helper->saveConfigValue(
-            \Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC . "/$mailchimpStoreId",
+        // Defensively remove any bare scalar issync row at default scope before
+        // writing the per-store issync/<id> child. If both coexist at the same
+        // scope Magento's Scope\Converter throws a site-wide fatal TypeError.
+        $this->_helper->deleteConfig(
+            \Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC,
+            0,
+            'default'
+        );
+        $this->_helper->saveMCMinSyncing(
+            $mailchimpStoreId,
             date('Y-m-d'),
             0,
             'default'
@@ -338,18 +315,35 @@ class Ecommerce
                 null,
                 false
             );
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->_helper->log('MailChimp error when updating syncing flag for store ' . $storeId);
             $this->_helper->log($e->getFriendlyMessage());
         }
     }
     protected function _ping($storeId)
     {
+        // Asked once per credential, not once per store view. A key that was
+        // rejected a moment ago is rejected for the next view too, and this
+        // loop used to pay a full round trip to be told so again.
+        if ($this->_helper->isApiKeyFailed($storeId)) {
+            return false;
+        }
+
         try {
             $api = $this->_helper->getApi($storeId);
             $api->root->info();
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_HttpError $e) {
+            // Ordered first because it is the subclass. DNS, TLS and timeouts
+            // say nothing about the credential, and a single blip must not
+            // silence every store view behind this one.
             $this->_helper->log($e->getFriendlyMessage());
+            return false;
+        } catch (\Mailchimp_Error $e) {
+            // An answer from Mailchimp about the account itself. This is the
+            // only call in the run that asks about the credential and nothing
+            // else, which is why it is the only one that records a verdict.
+            $this->_helper->log($e->getFriendlyMessage());
+            $this->_helper->markApiKeyFailed($storeId);
             return false;
         }
         return true;

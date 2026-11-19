@@ -11,10 +11,25 @@
  */
 -->
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <!--
+        The helper's $cache argument is optional so that anything still building
+        it with the old argument list keeps working. That optionality is exactly
+        why it has to be named here: ClassReader marks a parameter with a default
+        value as not required, and the ObjectManager hands such a parameter its
+        default rather than resolving its type. Without this line the argument
+        would arrive null on every instantiation, and the negative cache in
+        getJsUrl() would silently do nothing.
+    -->
+    <type name="Ebizmarts\MailChimp\Helper\Data">
+        <arguments>
+            <argument name="cache" xsi:type="object">Magento\Framework\App\CacheInterface</argument>
+            <argument name="state" xsi:type="object">Magento\Framework\App\State</argument>
+        </arguments>
+    </type>
     <type name="Ebizmarts\MailChimp\Block\Mailchimpjs">
         <arguments>
-            <argument name="helper" xsi:type="object">Ebizmarts\MailChimp\Helper\Data\Proxy</argument> 
-        </arguments> 
+            <argument name="helper" xsi:type="object">Ebizmarts\MailChimp\Helper\Data\Proxy</argument>
+        </arguments>
     </type>
     <type name="Magento\Quote\Model\Quote">
         <plugin name="mailchimp-save-quote" type="Ebizmarts\MailChimp\Model\Plugin\Quote" sortOrder="10"/>
@@ -53,6 +68,8 @@
                 <item name="mailchimp_errors_grid_data_source" xsi:type="string">Ebizmarts\MailChimp\Model\ResourceModel\MailChimpErrors\Collection</item>
                 <item name="mailchimp_stores_grid_data_source" xsi:type="string">Ebizmarts\MailChimp\Model\ResourceModel\MailChimpStores\Grid\Collection</item>
                 <item name="mailchimp_batch_grid_data_source" xsi:type="string">Ebizmarts\MailChimp\Model\ResourceModel\MailChimpSyncBatchesGrid\Collection</item>
+                <item name="mailchimp_cron_grid_data_source" xsi:type="string">Ebizmarts\MailChimp\Model\ResourceModel\Schedule\Collection</item>
+                <item name="mailchimp_carts_grid_data_source" xsi:type="string">Ebizmarts\MailChimp\Model\ResourceModel\Carts\Collection</item>
             </argument>
         </arguments>
     </type>
@@ -81,14 +98,22 @@
     <type name="Magento\SalesRule\Model\Coupon">
         <plugin name="mailchimp-coupon" type="Ebizmarts\MailChimp\Model\Plugin\Coupon" sortOrder="10"/>
     </type>
-    <type name="Magento\Sales\Model\Order\ShipmentRepository">
+    <type name="Magento\Sales\Model\Order\Shipment">
         <plugin name="mailchimp_save_shipment" type="Ebizmarts\MailChimp\Model\Plugin\Ship" sortOrder="10"/>
     </type>
-    <type name="Magento\Sales\Model\Order\InvoiceRepository">
+    <type name="Magento\Sales\Model\Order\Invoice">
         <plugin name="mailchimp_save_invoice" type="Ebizmarts\MailChimp\Model\Plugin\Invoice" sortOrder="10"/>
     </type>
     <type name="Magento\Sales\Model\Order\CreditmemoRepository">
         <plugin name="mailchimp_save_creditmemo" type="Ebizmarts\MailChimp\Model\Plugin\Creditmemo" sortOrder="10"/>
     </type>
     <preference for="Magento\Newsletter\Block\Subscribe" type="Ebizmarts\MailChimp\Block\Subscribe"/>
+    <type name="Ebizmarts\MailChimp\Block\Pixel\Script">
+        <arguments>
+            <argument name="helper" xsi:type="object">Ebizmarts\MailChimp\Helper\Data\Proxy</argument>
+        </arguments>
+    </type>
+    <type name="Magento\Checkout\CustomerData\Cart">
+        <plugin name="mailchimp_pixel_cart_data" type="Ebizmarts\MailChimp\Plugin\Checkout\CustomerData\CartPlugin" sortOrder="10"/>
+    </type>
 </config>

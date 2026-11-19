@@ -14,7 +14,7 @@
 namespace Ebizmarts\MailChimp\Model\Api;
 
 use Magento\SalesRule\Model\RuleRepository;
-use Symfony\Component\Config\Definition\Exception\Exception;
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
 
 class Order
 {
@@ -75,6 +75,10 @@ class Order
      * @var \Magento\Framework\Url
      */
     protected $_urlHelper;
+    /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
     protected $_chimpSyncEcommerce;
     protected $_firstDate;
     protected $_counter;
@@ -82,8 +86,8 @@ class Order
     protected $_batchId;
 
     /**
-     * Order constructor.
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param SyncHelper $syncHelper
      * @param \Magento\Sales\Model\OrderRepository $order
      * @param \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orderCollectionFactory
      * @param \Magento\Catalog\Model\ResourceModel\Product $product
@@ -98,6 +102,7 @@ class Order
      */
     public function __construct(
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        SyncHelper $syncHelper,
         \Magento\Sales\Model\OrderRepository $order,
         \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orderCollectionFactory,
         \Magento\Catalog\Model\ResourceModel\Product $product,
@@ -110,7 +115,9 @@ class Order
         \Magento\SalesRule\Model\RuleRepository $ruleRepository,
         \Magento\Framework\Url $urlHelper
     ) {
+
         $this->_helper          = $helper;
+        $this->syncHelper       = $syncHelper;
         $this->_order           = $order;
         $this->_orderCollectionFactory = $orderCollectionFactory;
         $this->_apiProduct      = $apiProduct;
@@ -196,26 +203,21 @@ class Order
                     }
                 }
 
-                $orderJson = $this->generatePOSTPayload($order, $mailchimpStoreId, $magentoStoreId, true);
-                if ($orderJson!==false) {
-                    if (!empty($orderJson)) {
-                        $this->_helper->modifyCounter(\Ebizmarts\MailChimp\Helper\Data::ORD_MOD);
-                        $batchArray[$this->_counter]['method'] = "PATCH";
-                        $batchArray[$this->_counter]['path'] = '/ecommerce/stores/' . $mailchimpStoreId . '/orders/' .
-                            $order->getIncrementId();
-                        $batchArray[$this->_counter]['operation_id'] = $this->_batchId . '_' . $orderId;
-                        $batchArray[$this->_counter]['body'] = $orderJson;
-                    } else {
-                        $error = __('Order ['.$order->getIncrementId().'] is empty');
-                        $this->_helper->log($error);
-                        $this->_updateOrder($mailchimpStoreId, $orderId, $this->_helper->getGmtDate(), $error, 0);
-                        continue;
-                    }
+                $payLoadReturn = $this->generatePOSTPayload($order, $mailchimpStoreId, $magentoStoreId);
+                $orderJson = $payLoadReturn['jsonOrder'];
+                $payLoadError = $payLoadReturn['error'];
+                if ($orderJson) {
+                    $this->_helper->modifyCounter(\Ebizmarts\MailChimp\Helper\Data::ORD_MOD);
+                    $batchArray[$this->_counter]['method'] = "PATCH";
+                    $batchArray[$this->_counter]['path'] = '/ecommerce/stores/' . $mailchimpStoreId . '/orders/' .
+                        $order->getIncrementId();
+                    $batchArray[$this->_counter]['operation_id'] = $this->_batchId . '_' . $orderId;
+                    $batchArray[$this->_counter]['body'] = $orderJson;
                     //update order delta
                     $this->_updateOrder($mailchimpStoreId, $orderId);
                     $this->_counter++;
                 } else {
-                    $error = __('Json error');
+                    $error = __($payLoadError);
                     $this->_updateOrder($mailchimpStoreId, $orderId, $this->_helper->getGmtDate(), $error, 0);
                     continue;
                 }
@@ -281,24 +283,20 @@ class Order
                         $this->_counter++;
                     }
                 }
-                $orderJson = $this->generatePOSTPayload($order, $mailchimpStoreId, $magentoStoreId);
-                if ($orderJson!==false) {
-                    if (!empty($orderJson)) {
-                        $this->_helper->modifyCounter(\Ebizmarts\MailChimp\Helper\Data::ORD_NEW);
-                        $batchArray[$this->_counter]['method'] = "POST";
-                        $batchArray[$this->_counter]['path'] = '/ecommerce/stores/' . $mailchimpStoreId . '/orders';
-                        $batchArray[$this->_counter]['operation_id'] = $this->_batchId . '_' . $orderId;
-                        $batchArray[$this->_counter]['body'] = $orderJson;
-                        //update order delta
-                        $this->_updateOrder($mailchimpStoreId, $orderId);
-                        $this->_counter++;
-                    } else {
-                        $error = __('Order ['.$item->getIncrementId().'] is empty');
-                        $this->_helper->log($error);
-                        $this->_updateOrder($mailchimpStoreId, $orderId, $this->_helper->getGmtDate(), $error, 0);
-                    }
+                $payLoadReturn = $this->generatePOSTPayload($order, $mailchimpStoreId, $magentoStoreId);
+                $orderJson = $payLoadReturn['jsonOrder'];
+                $payLoadError = $payLoadReturn['error'];
+                if ($orderJson) {
+                    $this->_helper->modifyCounter(\Ebizmarts\MailChimp\Helper\Data::ORD_NEW);
+                    $batchArray[$this->_counter]['method'] = "POST";
+                    $batchArray[$this->_counter]['path'] = '/ecommerce/stores/' . $mailchimpStoreId . '/orders';
+                    $batchArray[$this->_counter]['operation_id'] = $this->_batchId . '_' . $orderId;
+                    $batchArray[$this->_counter]['body'] = $orderJson;
+                    //update order delta
+                    $this->_updateOrder($mailchimpStoreId, $orderId);
+                    $this->_counter++;
                 } else {
-                    $error = __('Json error');
+                    $error = __($payLoadError);
                     $this->_updateOrder($mailchimpStoreId, $orderId, $this->_helper->getGmtDate(), $error, 0);
                     continue;
                 }
@@ -317,21 +315,21 @@ class Order
      * @param $order
      * @param $mailchimpStoreId
      * @param $magentoStoreId
-     * @param $isModifiedOrder
-     * @return string
+     * @return array
      * @throws \Exception
      */
     protected function generatePOSTPayload(
         \Magento\Sales\Model\Order $order,
         $mailchimpStoreId,
-        $magentoStoreId,
-        $isModifiedOrder = false
+        $magentoStoreId
     ) {
+        if (!$order->getCustomerEmail()) {
+            return ['error' => 'Customer email is empty', 'jsonOrder' => null];
+        }
         $data = [];
         $data['id'] = $order->getIncrementId();
-        if ($order->getMailchimpCampaignId()) {
-            $data['campaign_id'] = $order->getMailchimpCampaignId();
-        }
+        // Do not send an explicit campaign_id: Mailchimp performs order/revenue
+        // attribution internally, and sending one would override it.
 
         if ($order->getMailchimpLandingPage()) {
             $data['landing_site'] = $order->getMailchimpLandingPage();
@@ -348,6 +346,21 @@ class Order
 
         if (isset($statusArray['fulfillment_status'])) {
             $data['fulfillment_status'] = $statusArray['fulfillment_status'];
+            $trackNumber = $title = '';
+            $shipments = $order->getShipmentsCollection();
+            /**
+             * @var $ship \Magento\Sales\Model\Order\Shipment
+             */
+            foreach ($shipments as $ship) {
+                $tracks = $ship->getAllTracks();
+                foreach ($tracks as $track) {
+                    $title = $track->getTitle();
+                    $trackNumber = $track->getTrackNumber();
+                }
+            }
+            $data['tracking_number'] = $trackNumber;
+            $data['tracking_carrier'] = $title;
+            $data['tracking_url'] = '';
         }
 
         $data['processed_at_foreign'] = $order->getCreatedAt();
@@ -374,7 +387,7 @@ class Order
         } else {
             $data['order_total'] = $order->getGrandTotal();
             $data['tax_total'] = $order->getTaxAmount();
-            $data['discount_total'] = abs($order->getDiscountAmount());
+            $data['discount_total'] = $order->getDiscountAmount() ? abs($order->getDiscountAmount()) : 0;
             $data['shipping_total'] = $order->getShippingAmount();
         }
 
@@ -394,7 +407,7 @@ class Order
         foreach ($items as $item) {
             $variant = null;
             try {
-                $productSyncData = $this->_helper->getChimpSyncEcommerce(
+                $productSyncData = $this->syncHelper->getChimpSyncEcommerce(
                     $mailchimpStoreId,
                     $item->getProductId(),
                     \Ebizmarts\MailChimp\Helper\Data::IS_PRODUCT
@@ -417,6 +430,32 @@ class Order
                 if (!$variant) {
                     continue;
                 }
+            } elseif ($item->getProductType() == \Magento\Bundle\Model\Product\Type::TYPE_CODE) {
+                $itemCount++;
+                $data["lines"][] = [
+                    "id" => (string)$itemCount,
+                    "product_id" => $item->getProductId(),
+                    "product_variant_id" => $item-> getProductId().'-min',
+                    "quantity" => (int)$item->getQtyOrdered(),
+                    "price" => 0,
+                    "discount" => 0
+                ];
+
+                $bundleProducts = $order->getAllItems();
+                foreach ($bundleProducts as $bundleProduct) {
+                    if ($bundleProduct->getParentItemId() == $item->getItemId()) {
+                        $itemCount++;
+                        $data["lines"][] = [
+                            "id" => (string)$itemCount,
+                            "product_id" => $bundleProduct-> getProductId(),
+                            "product_variant_id" => $bundleProduct-> getProductId(),
+                            "quantity" => (int)$bundleProduct->getQtyOrdered(),
+                            "price" => $bundleProduct->getPrice(),
+                            "discount" => $bundleProduct->getDiscountAmount() ? abs($bundleProduct->getDiscountAmount()) : 0
+                        ];
+                    }
+                }
+                continue;
             } else {
                 $variant = $item->getProductId();
             }
@@ -429,13 +468,13 @@ class Order
                     "product_variant_id" => $variant,
                     "quantity" => (int)$item->getQtyOrdered(),
                     "price" => $item->getPrice(),
-                    "discount" => abs($item->getDiscountAmount())
+                    "discount" => $item->getDiscountAmount() ? abs($item->getDiscountAmount()) : 0
                 ];
             }
         }
         if (!$itemCount) {
             unset($data['lines']);
-            return "";
+            return ['error' => 'Order is empty', 'jsonOrder' => null];
         }
 
         //customer data
@@ -461,78 +500,82 @@ class Order
             $data["customer"]["last_name"] = $order->getCustomerLastname();
         }
         $billingAddress = $order->getBillingAddress();
-
-        if ($order->getCustomerIsGuest()) {
-            if ($billingAddress->getFirstname()) {
-                $data["customer"]["first_name"] = $billingAddress->getFirstname();
+        if ($billingAddress) {
+            if ($order->getCustomerIsGuest()) {
+                if ($billingAddress->getFirstname()) {
+                    $data["customer"]["first_name"] = $billingAddress->getFirstname();
+                }
+                if ($billingAddress->getLastname()) {
+                    $data["customer"]["last_name"] = $billingAddress->getLastname();
+                }
             }
-            if ($billingAddress->getLastname()) {
-                $data["customer"]["last_name"] = $billingAddress->getLastname();
+
+            $street = $billingAddress->getStreet();
+            $address = [];
+
+            if ($street[0]) {
+                $address["address1"] = $street[0];
+                $data['billing_address']["address1"] = $street[0];
             }
-        }
 
-        $street = $billingAddress->getStreet();
-        $address = [];
-
-        if ($street[0]) {
-            $address["address1"] = $street[0];
-            $data['billing_address']["address1"] = $street[0];
-        }
-
-        if (array_key_exists(1, $street)) {
-            $address["address2"] = $street[1];
-            $data['billing_address']["address2"] = $street[1];
-        }
-        if (array_key_exists(2, $street)) {
-            if (array_key_exists('address2',$address)) {
-                $address["address2"] = $address['address2'] . ", " . $street[2];
-                $data['billing_address']["address2"] = $data['billing_address']["address2"] . ", " . $street[2];
-            } else {
-                $address["address2"] = $street[2];
-                $data['billing_address']["address2"] = $street[2];
+            if (array_key_exists(1, $street)) {
+                $address["address2"] = $street[1];
+                $data['billing_address']["address2"] = $street[1];
             }
-        }
+            if (array_key_exists(2, $street)) {
+                if (array_key_exists('address2', $address)) {
+                    $address["address2"] = $address['address2'] . ", " . $street[2];
+                    $data['billing_address']["address2"] = $data['billing_address']["address2"] . ", " . $street[2];
+                } else {
+                    $address["address2"] = $street[2];
+                    $data['billing_address']["address2"] = $street[2];
+                }
+            }
 
-        if ($billingAddress->getCity()) {
-            $address["city"] = $billingAddress->getCity();
-            $data['billing_address']["city"] = $billingAddress->getCity();
-        }
+            if ($billingAddress->getCity()) {
+                $address["city"] = $billingAddress->getCity();
+                $data['billing_address']["city"] = $billingAddress->getCity();
+            }
 
-        if ($billingAddress->getRegion()) {
-            $address["province"] = $billingAddress->getRegion();
-            $data['billing_address']["province"] = $billingAddress->getRegion();
-        }
+            if ($billingAddress->getRegion()) {
+                $address["province"] = $billingAddress->getRegion();
+                $data['billing_address']["province"] = $billingAddress->getRegion();
+            }
 
-        if ($billingAddress->getRegionCode()) {
-            $address["province_code"] = $billingAddress->getRegionCode();
-            $data['billing_address']["province_code"] = $billingAddress->getRegionCode();
-        }
+            if ($billingAddress->getRegionCode()) {
+                $address["province_code"] = $billingAddress->getRegionCode();
+                $data['billing_address']["province_code"] = $billingAddress->getRegionCode();
+            }
 
-        if ($billingAddress->getPostcode()) {
-            $address["postal_code"] = $billingAddress->getPostcode();
-            $data['billing_address']["postal_code"] = $billingAddress->getPostcode();
-        }
+            if ($billingAddress->getPostcode()) {
+                $address["postal_code"] = $billingAddress->getPostcode();
+                $data['billing_address']["postal_code"] = $billingAddress->getPostcode();
+            }
 
-        if ($billingAddress->getCountryId()) {
-            /**
-             * @var $country \Magento\Directory\Model\Country
-             */
-            $country = $this->_countryFactory->create()->loadByCode($billingAddress->getCountryId());
-            $address["country"] = $data['billing_address']['country'] = $country->getName('en_US');
-            $address["country_code"] = $data['billing_address']['country_code'] = $billingAddress->getCountryId();
-        }
-        if (count($address)) {
-            $data["customer"]["address"] = $address;
-        }
+            if ($billingAddress->getCountryId()) {
+                /**
+                 * @var $country \Magento\Directory\Model\Country
+                 */
+                $country = $this->_countryFactory->create()->loadByCode($billingAddress->getCountryId());
+                $address["country"] = $data['billing_address']['country'] = $country->getName('en_US');
+                $address["country_code"] = $data['billing_address']['country_code'] = $billingAddress->getCountryId();
+            }
+            if (count($address)) {
+                $data["customer"]["address"] = $address;
+            }
 
-        if ($billingAddress->getName()) {
-            $data['billing_address']['name'] = $billingAddress->getName();
-        }
+            if ($billingAddress->getName()) {
+                $data['billing_address']['name'] = $billingAddress->getName();
+            }
 
-        //company
-        if ($billingAddress->getCompany()) {
-            $data["customer"]["company"] = $billingAddress->getCompany();
-            $data["billing_address"]["company"] = $billingAddress->getCompany();
+            //company
+            if ($billingAddress->getCompany()) {
+                $data["customer"]["company"] = $billingAddress->getCompany();
+                $data["billing_address"]["company"] = $billingAddress->getCompany();
+            }
+        } else {
+            $this->_helper->log("Order [".$order->getId()."] as no billing address");
+            return ['error' => "Order [".$order->getId()."] as no billing address", 'jsonOrder' => null];
         }
         $shippingAddress = $order->getShippingAddress();
         if ($shippingAddress) {
@@ -617,8 +660,7 @@ class Order
             $this->_helper->log('');
             $this->_helper->log("$jsonErrorMsg on order [".$order->getEntityId()."]");
         }
-
-        return $jsonData;
+        return ['error' =>  null, 'jsonOrder' => $jsonData];
     }
 
     protected function _getMailChimpStatus(\Magento\Sales\Model\Order $order)
@@ -694,7 +736,7 @@ class Order
                 if ($code->getCouponId() !== null) {
                     $rule = $this->ruleRepository->getById($code->getRuleId());
                     if ($rule->getRuleId() !== null) {
-                        $amountDiscounted = $order->getBaseDiscountAmount();
+                        $amountDiscounted = $order->getBaseDiscountAmount() ? $order->getBaseDiscountAmount() : 0;
                         $type = $rule->getSimpleAction();
                         if ($type == 'by_percent') {
                             $type = 'percentage';
@@ -715,7 +757,6 @@ class Order
         }
         return $promo;
     }
-
     protected function _updateOrder($storeId, $entityId, $sync_delta = null, $sync_error = null, $sync_modified = null)
     {
         if (!empty($sync_error)) {
@@ -723,7 +764,7 @@ class Order
         } else {
             $sent = \Ebizmarts\MailChimp\Helper\Data::WAITINGSYNC;
         }
-        $this->_helper->saveEcommerceData(
+        $this->syncHelper->saveEcommerceData(
             $storeId,
             $entityId,
             \Ebizmarts\MailChimp\Helper\Data::IS_ORDER,

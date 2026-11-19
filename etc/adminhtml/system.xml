@@ -23,7 +23,7 @@
             <group id="hint" translate="label" type="text" sortOrder="0" showInDefault="1" showInWebsite="1" showInStore="1">
                 <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\Fieldset\Hint</frontend_model>
             </group>
-            <group id="general" translate="label" type="text" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
+            <group id="general" translate="label comment" type="text" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
                 <label>Mailchimp General Configuration</label>
                 <field id="active" translate="label" type="select" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Enabled</label>
@@ -44,7 +44,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="monkeystore" translate="label" type="select" sortOrder="30" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="monkeystore" translate="label comment" type="select" sortOrder="30" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Mailchimp Store</label>
                     <source_model>Ebizmarts\MailChimp\Model\Config\Source\MonkeyStore</source_model>
                     <backend_model>Ebizmarts\MailChimp\Model\Config\Backend\MonkeyStore</backend_model>
@@ -68,7 +68,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="popup_form" translate="label" type="select" sortOrder="42" showInStore="1" showInWebsite="1" showInDefault="1">
+                <field id="popup_form" translate="label comment" type="select" sortOrder="42" showInStore="1" showInWebsite="1" showInDefault="1">
                     <label>Change the footer link</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                     <comment>Enabling this, the "Subscribe" button at the bottom open a popup with the Mailchimp subscription form</comment>
@@ -76,7 +76,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="popup_url" translate="label" type="text" sortOrder="43" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="popup_url" translate="label comment" type="text" sortOrder="43" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Popup Url</label>
                     <comment>Paste the form URL from your MailChimp audience</comment>
                     <depends>
@@ -92,7 +92,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="webhook_active" translate="label" type="select" sortOrder="50" showInDefault="1">
+                <field id="webhook_active" translate="label comment" type="select" sortOrder="50" showInDefault="1">
                     <label>Enable Two Way Sync</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                     <comment><![CDATA[If this is set to "No", the synchronization will be from Magento's newsletter to Mailchimp only]]></comment>
@@ -116,8 +116,25 @@
                     </depends>
                 </field>
                 <field id="log" translate="label" type="select" sortOrder="70" showInDefault="1" showInWebsite="1" showInStore="1">
-                    <label>Enable Log</label>
+                    <label>Enable log</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <depends>
+                        <field id="*/*/active">1</field>
+                    </depends>
+                </field>
+                <field id="enable_support" translate="label comment" type="select" sortOrder="75" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Enable Support</label>
+                    <comment>
+                        <![CDATA[By enabling this, you accept <a id='mailchimp_support' style="cursor: pointer">this</a>]]>
+                    </comment>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <depends>
+                        <field id="*/*/active">1</field>
+                    </depends>
+                </field>
+                <field id="clean_support_period" translate="label comment" type="select" sortOrder="77" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Clean support period</label>
+                    <source_model>Ebizmarts\MailChimp\Model\Config\Source\CleanPeriod</source_model>
                     <depends>
                         <field id="*/*/active">1</field>
                     </depends>
@@ -141,13 +158,6 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="clean_ecommerce" translate="button_label" type="button" sortOrder="87" showInDefault="1" showInWebsite="1" showInStore="1">
-                    <button_label>Remove Unused Registers</button_label>
-                    <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\CleanEcommerce</frontend_model>
-                    <depends>
-                        <field id="*/*/active">1</field>
-                    </depends>
-                </field>
                 <field id="fix_mailchimpjs" translate="button_label" type="button" sortOrder="88" showInDefault="1" showInWebsite="1" showInStore="1">
                     <button_label>Fix Mailchimp JS in frontend</button_label>
                     <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\FixMailchimpJS</frontend_model>
@@ -155,7 +165,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="interest" translate="label" type="multiselect" sortOrder="90" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="interest" translate="label comment" type="multiselect" sortOrder="90" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Available Groups</label>
                     <source_model>Ebizmarts\MailChimp\Model\Config\Source\Interest</source_model>
                     <can_be_empty>1</can_be_empty>
@@ -164,7 +174,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="interest_in_success" translate="label" type="select" sortOrder="100" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="interest_in_success" translate="label comment" type="select" sortOrder="100" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Show groups after checkout?</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                     <comment><![CDATA[Don't use in magento 2.1 see at <a href="https://github.com/magento/magento2/issues/4999" target="_blank">here</a>]]></comment>
@@ -186,12 +196,36 @@
                         <field id="*/*/interest_in_success">1</field>
                     </depends>
                 </field>
+                <field id="timeout" translate="label" type="select" sortOrder="130" showInDefault="1" showInStore="1" showInWebsite="0">
+                    <label>Connection timeout</label>
+                    <source_model>Ebizmarts\MailChimp\Model\Config\Source\Timeout</source_model>
+                    <depends>
+                        <field id="*/*/active">1</field>
+                    </depends>
+                </field>
+            </group>
+            <group id="telemetry" translate="label comment" type="text" sortOrder="105" showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>Diagnostics</label>
+                <comment>Helps us find and fix problems with the Mailchimp connection.</comment>
+                <field id="share_contact" translate="label comment" type="select" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Include your account contact details</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[The extension reports how the Mailchimp API is performing for your store &mdash; how many requests were made, how many failed and how long they took &mdash; so problems can be diagnosed without asking you for logs. No customer or order data is ever included. Set this to No to leave the account owner's name and email address out of those reports; everything else keeps working.]]></comment>
+                </field>
             </group>
             <group id="ecommerce" translate="label" type="text" sortOrder="110" showInDefault="1" showInWebsite="1" showInStore="1">
                 <label>Ecommerce Configuration</label>
                 <field id="active" translate="label" type="select" sortOrder="110" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Enabled</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+                <field id="all_customers" translate="label comment" type="select" sortOrder="115" showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Sync all customers</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[Sync all customers or only customer with orders"]]></comment>
+                    <depends>
+                        <field id="*/*/active">1</field>
+                    </depends>
                 </field>
                 <field id="customer_optin" translate="label" type="select" sortOrder="120" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Subscribe all customers to the newsletter</label>
@@ -207,6 +241,13 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
+                <field id="syncsalable" translate="label" type="select" sortOrder="135" showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Sync not salable products</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <depends>
+                        <field id="*/*/active">1</field>
+                    </depends>
+                </field>
                 <field id="send_promo" translate="label" type="select" sortOrder="140" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Send Promo Rules and Promo Codes</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
@@ -214,7 +255,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="including_taxes" translate="label" type="select" sortOrder="150" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="including_taxes" translate="label comment" type="select" sortOrder="150" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Prices including taxes</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                     <comment><![CDATA[You must configure Price Display Settings in Sales/Tax to "including taxes"]]></comment>
@@ -222,7 +263,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="reset_errors_retry" translate="button_label" type="button" sortOrder="160" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="reset_errors_retry" translate="button_label comment" type="button" sortOrder="160" showInDefault="1" showInWebsite="1" showInStore="1">
                     <button_label>Reset Errors and retry</button_label>
                     <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\ResetErrors</frontend_model>
                     <comment>Truncate the errors table and retry all the registers with error</comment>
@@ -230,7 +271,7 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="reset_errors_noretry" translate="button_label" type="button" sortOrder="170" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="reset_errors_noretry" translate="button_label comment" type="button" sortOrder="170" showInDefault="1" showInWebsite="1" showInStore="1">
                     <button_label>Reset Errors and no retry</button_label>
                     <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\ResetErrorsNoRetry</frontend_model>
                     <comment>Truncate the errors table and no retry all the registers with error</comment>
@@ -238,15 +279,15 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="clean_errors_months" translate="label" type="select" sortOrder="175" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="clean_errors_months" translate="label comment" type="select" sortOrder="175" showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Months to clear the error table</label>
                     <source_model>Ebizmarts\MailChimp\Model\Config\Source\Months</source_model>
-                    <comment><![CDATA[How many month before clean the error from the error table automatically and not retry]]></comment>
+                    <comment><![CDATA[How many month before clean the error from the error table automatically and not retry. Whatever you choose here, the oldest errors of a store view are removed once it holds more than a few thousand of them, so the table cannot grow without limit. Errors are what the Mailchimp columns on the product, customer and order grids show, so removing them removes those explanations.]]></comment>
                     <depends>
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="delete_store" translate="button_label" type="button" sortOrder="180" showInDefault="1" showInWebsite="1" showInStore="1">
+                <field id="delete_store" translate="button_label comment" type="button" sortOrder="180" showInDefault="1" showInWebsite="1" showInStore="1">
                     <button_label>Delete Store</button_label>
                     <comment>Proceed with caution, this delete the mailchimp store for all the connected magento stores</comment>
                     <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\DeleteStore</frontend_model>
@@ -298,12 +339,29 @@
                         <field id="*/*/active">1</field>
                     </depends>
                 </field>
-                <field id="create_abandonedcart_automation" translate="label" sortOrder="60" showInDefault="1" showInStore="1" showInWebsite="1">
+                <field id="create_abandonedcart_automation" translate="label comment" sortOrder="60" showInDefault="1" showInStore="1" showInWebsite="1">
                     <attribute type="button_label">Create Abandoned Cart Automation</attribute>
                     <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\CreateAbandonedCart</frontend_model>
                     <comment>Must be logged in to MailChimp's website previously to see the automation wizard, re-open if not</comment>
                     <depends>
                         <field id="*/*/active">1</field>
+                    </depends>
+                </field>
+            </group>
+            <group id="pixel" translate="label" type="text" sortOrder="100" showInDefault="0" showInWebsite="0" showInStore="1">
+                <label>Mailchimp Pixel</label>
+                <field id="enabled_for_store" translate="label comment" type="select" sortOrder="10" showInDefault="0" showInWebsite="0" showInStore="1">
+                    <label>Pixel Enabled</label>
+                    <comment><![CDATA[Enabled automatically when this store view connects to a Mailchimp store, and you can turn it off here. Enables behavioral tracking (page views, add to cart, checkout, purchases, etc.).]]></comment>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <frontend_model>Ebizmarts\MailChimp\Block\Adminhtml\System\Config\PixelEnabled</frontend_model>
+                    <backend_model>Ebizmarts\MailChimp\Model\Config\Backend\PixelEnabled</backend_model>
+                </field>
+                <field id="script_url" translate="label" type="text" sortOrder="20" showInDefault="0" showInWebsite="0" showInStore="1">
+                    <label>Pixel Script URL</label>
+                    <comment>Set automatically from the Mailchimp connected site. Do not edit manually.</comment>
+                    <depends>
+                        <field id="*/*/enabled_for_store">1</field>
                     </depends>
                 </field>
             </group>

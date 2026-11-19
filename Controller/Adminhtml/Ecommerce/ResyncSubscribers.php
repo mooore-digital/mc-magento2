@@ -16,6 +16,7 @@ namespace Ebizmarts\MailChimp\Controller\Adminhtml\Ecommerce;
 use Magento\Framework\Controller\Result\JsonFactory;
 use Magento\Framework\Exception\ValidatorException;
 use Symfony\Component\Config\Definition\Exception\Exception;
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
 
 class ResyncSubscribers extends \Magento\Backend\App\Action
 {
@@ -24,32 +25,38 @@ class ResyncSubscribers extends \Magento\Backend\App\Action
      */
     protected $resultJsonFactory;
     /**
-     * @var \Ebizmarts\MailChimp\Helper\Data
-     */
-    protected $helper;
-    /**
      * @var \Magento\Store\Model\StoreManagerInterface
      */
     protected $storeManager;
+    /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
+    /**
+     * @var \Ebizmarts\MailChimp\Helper\Data
+     */
+    private $helper;
 
     /**
-     * ResetLocalErrors constructor.
      * @param \Magento\Backend\App\Action\Context $context
      * @param JsonFactory $resultJsonFactory
      * @param \Magento\Store\Model\StoreManagerInterface $storeManagerInterface
+     * @param SyncHelper $syncHelper
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
      */
     public function __construct(
         \Magento\Backend\App\Action\Context $context,
         JsonFactory $resultJsonFactory,
         \Magento\Store\Model\StoreManagerInterface $storeManagerInterface,
+        SyncHelper $syncHelper,
         \Ebizmarts\MailChimp\Helper\Data $helper
     ) {
-    
+
         parent::__construct($context);
         $this->resultJsonFactory    = $resultJsonFactory;
-        $this->helper               = $helper;
         $this->storeManager         = $storeManagerInterface;
+        $this->syncHelper           = $syncHelper;
+        $this->helper               = $helper;
     }
 
     public function execute()
@@ -57,36 +64,20 @@ class ResyncSubscribers extends \Magento\Backend\App\Action
         $valid = 1;
         $message = '';
         $params = $this->getRequest()->getParams();
-        if (isset($params['website'])) {
-            $mailchimpList = $this->helper->getConfigValue(
-                \Ebizmarts\MailChimp\Helper\Data::XML_PATH_LIST,
-                $params['website'],
-                'website'
-            );
-        } elseif (isset($params['store'])) {
-            $mailchimpList = $this->helper->getConfigValue(
-                \Ebizmarts\MailChimp\Helper\Data::XML_PATH_LIST,
-                $params['store'],
-                'store'
-            );
-        } else {
-            $mailchimpList = $this->helper->getConfigValue(
-                \Ebizmarts\MailChimp\Helper\Data::XML_PATH_LIST,
-                $this->storeManager->getStore()
-            );
-        }
-
+        $mailchimpList = $params['listId'];
         $resultJson = $this->resultJsonFactory->create();
         try {
-            $this->helper->resyncAllSubscribers($mailchimpList);
+            $this->syncHelper->resyncAllSubscribers($mailchimpList);
         } catch (ValidatorException $e) {
             $valid = 0;
             $message = $e->getMessage();
         }
-        return $resultJson->setData([
+        $ret = [
             'valid' => (int)$valid,
             'message' => $message,
-        ]);
+        ];
+        $this->helper->buttonPressed("ResyncSubscribers",  $ret);
+        return $resultJson->setData($ret);
     }
     protected function _isAllowed()
     {

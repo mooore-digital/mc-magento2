@@ -59,7 +59,24 @@ class Get extends Action
                     if ($store['list_id']=='') {
                         continue;
                     }
-                    $list = $api->lists->getLists($store['list_id']);
+                    // `total_contacts` is returned only when
+                    // include_total_contacts is set, so a caller that needs it
+                    // has to ask on every read. Asking only on the statistics
+                    // cron leaves every other single-audience read returning a
+                    // response without it.
+                    $list = $api->lists->getLists(
+                        $store['list_id'],
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        true
+                    );
                     $result['stores'][] = [
                         'id' => $store['id'],
                         'name' => $store['name'],
@@ -69,7 +86,7 @@ class Get extends Action
                     $result['valid'] = 1;
                 }
             }
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->_mhelper->log($e->getFriendlyMessage());
             $result['valid'] = 0;
             $result['errormsg'] = $e->getTitle();

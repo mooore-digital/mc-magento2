@@ -12,6 +12,8 @@
  */
 namespace Ebizmarts\MailChimp\Model\Api;
 
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
+
 class Subscriber
 {
     const BATCH_LIMIT = 100;
@@ -31,22 +33,37 @@ class Subscriber
      * @var \Magento\Newsletter\Model\SubscriberFactory
      */
     protected $_subscriberFactory;
+    /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
     protected $_interest=null;
 
     /**
-     * Subscriber constructor.
+     * Whether the interest groups for the store view being synced have been
+     * fetched. Separate from $_interest because [] is a real answer: without
+     * it, a store with no groups configured looks unfetched forever.
+     *
+     * @var bool
+     */
+    protected $_interestLoaded = false;
+
+    /**
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param SyncHelper $syncHelper
      * @param \Magento\Newsletter\Model\ResourceModel\Subscriber\CollectionFactory $subscriberCollection
      * @param \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory
      * @param \Magento\Framework\Message\ManagerInterface $message
      */
     public function __construct(
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        SyncHelper $syncHelper,
         \Magento\Newsletter\Model\ResourceModel\Subscriber\CollectionFactory $subscriberCollection,
         \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory,
         \Magento\Framework\Message\ManagerInterface $message
     ) {
         $this->_helper                  = $helper;
+        $this->syncHelper               = $syncHelper;
         $this->_subscriberCollection    = $subscriberCollection;
         $this->_message                 = $message;
         $this->_subscriberFactory       = $subscriberFactory;
@@ -60,7 +77,16 @@ class Subscriber
 
         //get subscribers
 //        $listId = $this->_helper->getGeneralList($storeId);
-        $this->_interest = $this->_helper->getInterest($storeId);
+        // Reset rather than fetch. This object has no shared="false" in
+        // di.xml, so it is one instance reused for every store view in a cron
+        // run -- carrying one view's groups into the next would sync the wrong
+        // groups, with no error and no log line to show for it.
+        //
+        // And fetching here cost a call on every view of every run, before
+        // anything established there was a subscriber to sync at all.
+        $this->_interest       = null;
+        $this->_interestLoaded = false;
+
         $collection = $this->_subscriberCollection->create();
         $collection->addFieldToFilter('subscriber_status', ['eq' => 1])
             ->addFieldToFilter('store_id', ['eq' => $storeId]);
@@ -71,9 +97,7 @@ class Subscriber
             "' and m4m.mailchimp_store_id = '".$listId."'",
             ['m4m.*']
         );
-        $collection->getSelect()->where("m4m.mailchimp_sync_delta IS null ".
-            "OR (m4m.mailchimp_sync_delta > '".$this->_helper->getMCMinSyncDateFlag().
-            "' and m4m.mailchimp_sync_modified = 1)");
+        $collection->getSelect()->where("m4m.mailchimp_sync_delta IS null OR m4m.mailchimp_sync_modified = 1");
         $collection->getSelect()->limit(self::BATCH_LIMIT);
         $subscriberArray = [];
         $date = $this->_helper->getDateMicrotime();
@@ -137,6 +161,12 @@ class Subscriber
     protected function _getInterest(\Magento\Newsletter\Model\Subscriber $subscriber)
     {
         $rc = [];
+
+        if (!$this->_interestLoaded) {
+            $this->_interest       = $this->_helper->getInterest($subscriber->getStoreId());
+            $this->_interestLoaded = true;
+        }
+
         $interest = $this->_helper->getSubscriberInterest(
             $subscriber->getSubscriberId(),
             $subscriber->getStoreId(),
@@ -181,7 +211,7 @@ class Subscriber
         try {
             $md5HashEmail = hash('md5', strtolower($subscriber->getSubscriberEmail()));
             $api->lists->members->update($listId, $md5HashEmail, null, 'cleaned');
-        } catch (\MailChimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->_helper->log($e->getFriendlyMessage(), $storeId);
             $this->_message->addErrorMessage($e->getMessage());
         } catch (\Exception $e) {
@@ -207,7 +237,7 @@ class Subscriber
         $sync_error = null,
         $sync_modified = null
     ) {
-        $this->_helper->saveEcommerceData(
+        $this->syncHelper->saveEcommerceData(
             $listId,
             $entityId,
             \Ebizmarts\MailChimp\Helper\Data::IS_SUBSCRIBER,

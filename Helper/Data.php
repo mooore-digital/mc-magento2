@@ -14,7 +14,8 @@ namespace Ebizmarts\MailChimp\Helper;
 use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\Exception\ValidatorException;
 use Magento\Store\Model\Store;
-use Symfony\Component\Config\Definition\Exception\Exception;
+use Ebizmarts\MailChimp\Model\MailchimpNotificationFactory as MailchimpNotificationFactory;
+use Magento\Framework\App\ProductMetadataInterface;
 
 class Data extends \Magento\Framework\App\Helper\AbstractHelper
 {
@@ -26,12 +27,14 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     const XML_PATH_WEBHOOK_ACTIVE    = 'mailchimp/general/webhook_active';
     const XML_PATH_WEBHOOK_DELETE    = 'mailchimp/general/webhook_delete';
     const XML_PATH_LOG               = 'mailchimp/general/log';
+    const XML_PATH_TIMEOUT           = 'mailchimp/general/timeout';
     const XML_PATH_MAPPING           = 'mailchimp/general/mapping';
     const XML_MAILCHIMP_STORE        = 'mailchimp/general/monkeystore';
     const XML_MAILCHIMP_JS_URL       = 'mailchimp/general/mailchimpjsurl';
     const XML_PATH_CONFIRMATION_FLAG = 'newsletter/subscription/confirm';
     const XML_PATH_STORE             = 'mailchimp/ecommerce/store';
     const XML_PATH_ECOMMERCE_ACTIVE  = 'mailchimp/ecommerce/active';
+    const XML_PATH_ALL_CUSTOMERS     = 'mailchimp/ecommerce/all_customers';
     const XML_PATH_SYNC_DATE         = 'mailchimp/general/mcminsyncdateflag';
     const XML_ECOMMERCE_OPTIN        = 'mailchimp/ecommerce/customer_optin';
     const XML_ECOMMERCE_FIRSTDATE    = 'mailchimp/ecommerce/firstdate';
@@ -48,10 +51,69 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     const XML_INTEREST_SUCCESS_HTML_AFTER   = 'mailchimp/general/interest_success_html_after';
     const XML_MAGENTO_MAIL           = 'mailchimp/general/magentoemail';
     const XML_SEND_PROMO             = 'mailchimp/ecommerce/send_promo';
+    const XML_SYNC_SALABLE             = 'mailchimp/ecommerce/syncsalable';
     const XML_INCLUDING_TAXES        = 'mailchimp/ecommerce/including_taxes';
     const XML_POPUP_FORM             = 'mailchimp/general/popup_form';
     const XML_POPUP_URL              = 'mailchimp/general/popup_url';
     const XML_CLEAN_ERROR_MONTHS     = 'mailchimp/ecommerce/clean_errors_months';
+    const XML_ENABLE_SUPPORT         = 'mailchimp/general/enable_support';
+    const SYNC_TOKEN                 = 'mailchimp/statistics/token';
+    const SYNC_NOTIFICATION_URL       = 'mailchimp/statistics/notification_url';
+    const XML_CLEAN_SUPPORT_PERIOD    = 'mailchimp/general/clean_support_period';
+    const XML_REGISTER_URL            = 'mailchimp/statistics/register_url';
+    const XML_STATISTICS_TOKEN        = 'mailchimp/register/token';
+
+    /**
+     * Status reporting beacon. The token is per store view; the cron expression is
+     * per install; the delivery uid is the last notification actually written
+     * to the admin inbox. Deliberately NOT mailchimp/register/token, which
+     * holds a token from the previous relay and is meaningless to this service.
+     */
+    const XML_EDGE_TOKEN              = 'mailchimp/register/edge_token';
+    const XML_EDGE_BEACON_CRON        = 'mailchimp/register/beacon_cron';
+    const XML_EDGE_DELIVERY_UID       = 'mailchimp/register/last_delivery_uid';
+
+    /**
+     * Whether the merchant lets the account owner's name and address travel
+     * with diagnostics.
+     *
+     * The path is shared with the API library on purpose: one switch in the
+     * admin has to govern every lane that reports, or it describes only part
+     * of what leaves the server.
+     *
+     * The library reads it from the release that first gives it anything to
+     * report — the constant and the reporting arrived in the same commit
+     * there, so no version of it can send contact details while ignoring this.
+     * Until that release is the one installed, the switch governs this
+     * extension's reports and there is nothing else for it to govern.
+     */
+    const XML_TELEMETRY_SHARE_CONTACT = 'mailchimp/telemetry/share_contact';
+
+    const XML_PIXEL_ENABLED_FOR_STORE = 'mailchimp/pixel/enabled_for_store';
+    const XML_PIXEL_SCRIPT_URL        = 'mailchimp/pixel/script_url';
+    const XML_PIXEL_SCRIPT_FRAGMENT   = 'mailchimp/pixel/script_fragment';
+
+    /**
+     * How long a failed connected-site lookup is remembered for.
+     *
+     * Fifteen minutes is the balance between the two ways this can be wrong.
+     * Too short and a Mailchimp outage is still paid for by visitors, since
+     * the whole point is that a store view attempts once per window instead of
+     * once per render. Too long and a merchant who fixes the cause outside
+     * Magento -- reconnecting the site, restoring a revoked key -- waits for
+     * the window to run out, because nothing inside Magento changes to say so.
+     *
+     * The admin's own fixes do not wait: choosing a different Mailchimp store
+     * and the "Fix Mailchimp JS" button both drop the markers outright, so the
+     * TTL only ever governs repairs made on Mailchimp's side.
+     */
+    const JS_URL_FAILURE_TTL         = 900;
+
+    /**
+     * Tagged so those two admin paths can drop every marker in one call,
+     * without having to work out which store views hold one.
+     */
+    const JS_URL_FAILURE_CACHE_TAG   = 'MAILCHIMP_JS_URL_FAILURE';
 
     const ORDER_STATE_OK             = 'complete';
 
@@ -71,6 +133,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     const SUB_NEW       = "SubscriberNew";
     const PRO_MOD       = "ProductModified";
     const PRO_NEW       = "ProductNew";
+    const PRO_DELETED   = "ProductDeleted";
     const CUS_MOD       = "CustomerModified";
     const CUS_NEW       = "CustomerNew";
     const ORD_MOD       = "OrderModified";
@@ -84,7 +147,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     const SYNCERROR     = 4;
     const NOTSYNCED = 5;
 
-    const NEVERSYNC     = 6;
+    const NEVERSYNC     = 0;
 
     const BATCH_CANCELED = 'canceled';
     const BATCH_COMPLETED = 'completed';
@@ -93,7 +156,40 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
 
     const MAX_MERGEFIELDS = 100;
 
+    /**
+     * The oldest library this extension is willing to run against without
+     * saying so in the admin.
+     *
+     * This must track the `ebizmarts/mailchimp-lib` floor in composer.json.
+     * They answer for two different populations and only one of them is
+     * enforced: composer holds the floor for installations that were installed
+     * with composer, and this constant is the only thing that says anything at
+     * all to an app/code installation, where the merchant runs whichever
+     * library happens to be present. A constant left behind the floor is
+     * silence aimed at exactly the installations that cannot be told any other
+     * way.
+     */
+    const MIN_LIB_VERSION = '3.0.52';
+
     protected $counters = [];
+
+    /**
+     * @var ProductMetadataInterface
+     */
+    private $productMetadata;
+
+    /**
+     * API keys that already failed in this process, by fingerprint.
+     *
+     * Process-scoped on purpose. A rejected credential is an answer, not a
+     * blip: it will be just as rejected for the next store view a millisecond
+     * later. Nothing is written anywhere, so the next cron run starts clean and
+     * a key fixed between runs is picked up immediately.
+     *
+     * @var array
+     */
+    private $failedApiKeys = [];
+
     /**
      * @var \Magento\Store\Model\StoreManagerInterface
      */
@@ -103,10 +199,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      */
     private $_mlogger;
     /**
-     * @var \Magento\Customer\Model\GroupRegistry
-     */
-    private $_groupRegistry;
-    /**
      * @var \Magento\Framework\App\Config\ScopeConfigInterface
      */
     private $_scopeConfig;
@@ -114,10 +206,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      * @var \Magento\Framework\App\RequestInterface
      */
     protected $_request;
-    /**
-     * @var \Magento\Framework\App\State
-     */
-    private $_state;
     /**
      * @var \Magento\Framework\Module\ModuleList\Loader
      */
@@ -131,22 +219,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      */
     private $_api;
 
-    /**
-     * @var \Magento\Customer\Model\ResourceModel\Customer\CustomerRepository
-     */
-    private $_customer;
-    /**
-     * @var \Ebizmarts\MailChimp\Model\MailChimpErrors
-     */
-    private $_mailChimpErrors;
-    /**
-     * @var \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerceFactory
-     */
-    private $_mailChimpSyncEcommerce;
-    /**
-     * @var \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerce
-     */
-    private $_mailChimpSyncE;
     /**
      * @var \Ebizmarts\MailChimp\Model\MailChimpSyncBatches
      */
@@ -171,11 +243,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      * @var \Magento\Customer\Model\ResourceModel\Customer\CollectionFactory
      */
     private $_customerCollection;
-    private $_addressRepositoryInterface;
-    /**
-     * @var \Magento\Framework\DB\Adapter\AdapterInterface
-     */
-    private $connection;
     /**
      * @var \Magento\Framework\App\ResourceConnection
      */
@@ -184,6 +251,14 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      * @var \Magento\Framework\App\Cache\TypeListInterface
      */
     private $_cacheTypeList;
+    /**
+     * @var \Magento\Framework\App\CacheInterface|null
+     */
+    private $_cache;
+    /**
+     * @var \Magento\Framework\App\State|null
+     */
+    private $_state;
     /**
      * @var \Magento\Customer\Model\ResourceModel\Attribute\CollectionFactory
      */
@@ -219,26 +294,24 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     /**
      * @var \Magento\Framework\Locale\Resolver
      */
+    /**
+     * @var MailchimpNotificationFactory
+     */
+    protected $mailchimpNotificationFactory;
+
     protected $resolver;
-    private $customerAtt    = null;
+    private $customerAtt    = [];
     private $addressAtt     = null;
-    private $_mapFields     = null;
+    private $_mapFields     = [];
 
     /**
-     * Data constructor.
      * @param \Magento\Framework\App\Helper\Context $context
      * @param \Magento\Store\Model\StoreManagerInterface $storeManager
      * @param \Ebizmarts\MailChimp\Model\Logger\Logger $logger
-     * @param \Magento\Customer\Model\GroupRegistry $groupRegistry
-     * @param \Magento\Framework\App\State $state
      * @param \Magento\Framework\Module\ModuleList\Loader $loader
      * @param \Magento\Config\Model\ResourceModel\Config $config
      * @param \Mailchimp $api
      * @param \Magento\Framework\App\Cache\TypeListInterface $cacheTypeList
-     * @param \Magento\Customer\Model\ResourceModel\CustomerRepository $customer
-     * @param \Ebizmarts\MailChimp\Model\MailChimpErrors $mailChimpErrors
-     * @param \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerceFactory $mailChimpSyncEcommerce
-     * @param \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerce $mailChimpSyncE
      * @param \Ebizmarts\MailChimp\Model\MailChimpSyncBatches $syncBatches
      * @param \Ebizmarts\MailChimp\Model\MailChimpStoresFactory $mailChimpStoresFactory
      * @param \Ebizmarts\MailChimp\Model\MailChimpStores $mailChimpStores
@@ -246,7 +319,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      * @param \Magento\Framework\Encryption\Encryptor $encryptor
      * @param \Magento\Newsletter\Model\ResourceModel\Subscriber\CollectionFactory $subscriberCollection
      * @param \Magento\Customer\Model\ResourceModel\Customer\CollectionFactory $customerCollection
-     * @param \Magento\Customer\Api\AddressRepositoryInterface $addressRepositoryInterface
      * @param \Magento\Customer\Model\CustomerFactory $customerFactory
      * @param \Magento\Directory\Api\CountryInformationAcquirerInterface $countryInformation
      * @param ResourceConnection $resource
@@ -256,21 +328,16 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      * @param \Magento\Framework\Stdlib\DateTime\DateTime $date
      * @param \Magento\Directory\Model\CountryFactory $countryFactory
      * @param \Magento\Framework\Locale\Resolver $resolver
+     * @param MailchimpNotificationFactory $mailchimpNotificationFactory
      */
     public function __construct(
         \Magento\Framework\App\Helper\Context $context,
         \Magento\Store\Model\StoreManagerInterface $storeManager,
         \Ebizmarts\MailChimp\Model\Logger\Logger $logger,
-        \Magento\Customer\Model\GroupRegistry $groupRegistry,
-        \Magento\Framework\App\State $state,
         \Magento\Framework\Module\ModuleList\Loader $loader,
         \Magento\Config\Model\ResourceModel\Config $config,
         \Mailchimp $api,
         \Magento\Framework\App\Cache\TypeListInterface $cacheTypeList,
-        \Magento\Customer\Model\ResourceModel\CustomerRepository $customer,
-        \Ebizmarts\MailChimp\Model\MailChimpErrors $mailChimpErrors,
-        \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerceFactory $mailChimpSyncEcommerce,
-        \Ebizmarts\MailChimp\Model\MailChimpSyncEcommerce $mailChimpSyncE,
         \Ebizmarts\MailChimp\Model\MailChimpSyncBatches $syncBatches,
         \Ebizmarts\MailChimp\Model\MailChimpStoresFactory $mailChimpStoresFactory,
         \Ebizmarts\MailChimp\Model\MailChimpStores $mailChimpStores,
@@ -278,7 +345,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         \Magento\Framework\Encryption\Encryptor $encryptor,
         \Magento\Newsletter\Model\ResourceModel\Subscriber\CollectionFactory $subscriberCollection,
         \Magento\Customer\Model\ResourceModel\Customer\CollectionFactory $customerCollection,
-        \Magento\Customer\Api\AddressRepositoryInterface $addressRepositoryInterface,
         \Magento\Customer\Model\CustomerFactory $customerFactory,
         \Magento\Directory\Api\CountryInformationAcquirerInterface $countryInformation,
         \Magento\Framework\App\ResourceConnection $resource,
@@ -287,31 +353,27 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         \Magento\Framework\App\DeploymentConfig $deploymentConfig,
         \Magento\Framework\Stdlib\DateTime\DateTime $date,
         \Magento\Directory\Model\CountryFactory $countryFactory,
-        \Magento\Framework\Locale\Resolver $resolver
+        \Magento\Framework\Locale\Resolver $resolver,
+        MailchimpNotificationFactory $mailchimpNotificationFactory,
+        ProductMetadataInterface $productMetadata,
+        ?\Magento\Framework\App\CacheInterface $cache = null,
+        ?\Magento\Framework\App\State $state = null
     ) {
 
         $this->_storeManager  = $storeManager;
         $this->_mlogger       = $logger;
-        $this->_groupRegistry = $groupRegistry;
         $this->_scopeConfig   = $context->getScopeConfig();
         $this->_request       = $context->getRequest();
-        $this->_state         = $state;
         $this->_loader        = $loader;
         $this->_config        = $config;
         $this->_api           = $api;
-        $this->_customer      = $customer;
-        $this->_mailChimpErrors         = $mailChimpErrors;
-        $this->_mailChimpSyncEcommerce  = $mailChimpSyncEcommerce;
-        $this->_mailChimpSyncE          = $mailChimpSyncE;
         $this->_syncBatches             = $syncBatches;
         $this->_mailChimpStores         = $mailChimpStores;
         $this->_mailChimpStoresFactory  = $mailChimpStoresFactory;
         $this->_encryptor               = $encryptor;
         $this->_subscriberCollection    = $subscriberCollection;
         $this->_customerCollection      = $customerCollection;
-        $this->_addressRepositoryInterface = $addressRepositoryInterface;
         $this->_resource                = $resource;
-        $this->connection               = $resource->getConnection();
         $this->_cacheTypeList           = $cacheTypeList;
         $this->_attCollection           = $attCollection;
         $this->_customerFactory         = $customerFactory;
@@ -322,6 +384,10 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         $this->_date                    = $date;
         $this->countryFactory           = $countryFactory;
         $this->resolver                 = $resolver;
+        $this->mailchimpNotificationFactory = $mailchimpNotificationFactory;
+        $this->productMetadata          = $productMetadata;
+        $this->_cache                   = $cache;
+        $this->_state                   = $state;
         parent::__construct($context);
     }
 
@@ -332,6 +398,10 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     public function isMailChimpEnabled($store = null)
     {
         return $this->getConfigValue(self::XML_PATH_ACTIVE, $store);
+    }
+    public function isSupportEnabled()
+    {
+        return $this->getConfigValue(self::XML_ENABLE_SUPPORT);
     }
 
     /**
@@ -352,7 +422,10 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         $apiKey =$this->getConfigValue(self::XML_PATH_APIKEY, $store, $scope);
         return $this->_encryptor->decrypt($apiKey);
     }
-
+    public function getTimeOut($store=null, $scope=null)
+    {
+        return $this->getConfigValue(self::XML_PATH_TIMEOUT, $store, $scope);
+    }
     /**
      * @param null $store
      * @return \Mailchimp
@@ -360,13 +433,160 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     public function getApi($store = null, $scope = null)
     {
         $apiKey = $this->getApiKey($store, $scope);
+        $timeOut = $this->getTimeOut($store,$scope);
         $this->_api->setApiKey($apiKey);
-        $this->_api->setUserAgent('Mailchimp4Magento' . (string)$this->getModuleVersion());
+        $this->_api->setHelper($this);
+        $this->_api->setStoreURL($this->_storeManager->getStore($store)->getBaseUrl());
+        // The library cannot observe this one. It is visible in a path only
+        // when a caller addresses a store directly, and the ecommerce sync
+        // posts all of its per-store work to `batches` with the store id in
+        // the body — which the library deliberately never reads.
+        //
+        // Guarded because composer.json is not always what decides which
+        // library is present. An app/code install puts this extension on disk
+        // by clone and the library comes from a separate composer require, so
+        // the `>=3.0.47` constraint below is inert there and the two can be
+        // updated independently. Without this check that pairing is a fatal on
+        // every call into the API, which is most of the extension.
+        if (method_exists($this->_api, 'setMailchimpStoreId')) {
+            $this->_api->setMailchimpStoreId($this->getConfigValue(self::XML_MAILCHIMP_STORE, $store, $scope));
+        }
+        $this->_api->setUserAgent($this->userAgent());
+        $this->applySurface();
+        if ($timeOut) {
+            $this->_api->setTimeOut($timeOut);
+        }
         return $this->_api;
     }
-    private function getBindableAttributes()
+    /**
+     * Tell the library which surface this process is serving.
+     *
+     * The library cannot work this out for itself. It sees PHP_SAPI and
+     * nothing else, and Magento's own cron entry point refuses to run under
+     * the CLI SAPI -- `pub/cron.php` exits on `php_sapi_name() === 'cli'` and
+     * then boots the framework's Cron application -- so an installation
+     * running cron over HTTP is a web-SAPI process doing a full sync, and it
+     * is indistinguishable from a shopper's page render on the other side.
+     *
+     * Three guards, each for a different failure:
+     *
+     * `setSurface()` is checked because composer.json is not always what
+     * decides which library is present. An app/code install puts this
+     * extension on disk by clone and the library comes from a separate
+     * composer require, so the version constraint is inert there and the two
+     * move independently. Without the check, the pairing is a fatal on every
+     * call into the API.
+     *
+     * `getAreaCode()` throws when nothing has set an area yet, which is a
+     * normal state early in a request rather than an error. Reporting no area
+     * is the right answer there; failing the API call is not. The catch is
+     * `\Throwable` rather than the `LocalizedException` the method declares,
+     * because DI resolves an interceptor here and a plugin on `getAreaCode()`
+     * can throw anything at all -- and the principle is about what this method
+     * is allowed to cost, not about which class the platform happens to use.
+     *
+     * `getFullActionName()` is not on RequestInterface and does not exist on
+     * the console request at all. It is reachable here because the object DI
+     * resolves for RequestInterface in a CLI process is the HTTP request
+     * rather than the console one -- but that is a fact about this
+     * installation's wiring, not a guarantee of the interface.
+     *
+     * And one filter, which the guards do not cover: on that CLI-resolved HTTP
+     * request nothing has been routed, so the three segments are all null and
+     * getFullActionName() returns the bare delimiters -- `__`. That is a
+     * well-formed token under the library's pattern and under the receiver's,
+     * so it would be accepted, stored, and counted as an action name on every
+     * cron run. An action has to carry at least one character that is not a
+     * separator to mean anything.
+     *
+     * The library rejects that shape as well, so this is not the only thing
+     * holding it. It is kept here because the two know different things: the
+     * library sees a token with no name in it, while this end knows why there
+     * is no name -- nothing was routed -- and can decline to send the bytes at
+     * all. And an app/code install pairs whichever library is on disk with
+     * whichever module is on disk, so neither end can assume the other's
+     * version.
+     *
+     * The segments are checked one at a time, and that is the only check that
+     * can be made here rather than downstream. `getFullActionName()` is three
+     * values concatenated, and nothing constrains those values to strings:
+     * `setRouteName()` and its siblings take whatever they are handed, and the
+     * concatenation turns it into an ordinary string on the way out. Measured
+     * on this platform -- framework 103.0.8, PHP 8.3 -- integers compose
+     * `1_2_3` and booleans compose `1_1_1`. Both are ASCII, both carry
+     * something that is not a separator, and both name a route that has never
+     * existed anywhere. Nothing downstream can tell either from a real action,
+     * because by then it is an unremarkable string.
+     *
+     * A segment may be a string, or null for a part that was never routed.
+     * Null is why the rule is per segment rather than all-or-nothing: a route
+     * that resolved with the controller and action that did not composes
+     * `mailchimp__`, which is true and worth reporting.
+     *
+     * An array or an object does not reach any of this -- `setRouteName()`
+     * indexes the route table with what it is given, so both raise a TypeError
+     * inside the platform long before this method runs.
+     *
+     * @return void
+     */
+    private function applySurface()
     {
-        $systemAtt = $this->getCustomerAtts();
+        if (!method_exists($this->_api, 'setSurface')) {
+            return;
+        }
+
+        $area = '';
+        if ($this->_state !== null) {
+            try {
+                $areaCode = $this->_state->getAreaCode();
+                if (is_string($areaCode)) {
+                    $area = $areaCode;
+                }
+            } catch (\Throwable $t) {
+                $area = '';
+            }
+        }
+
+        $this->_api->setSurface($area, $this->fullActionName());
+    }
+
+    /**
+     * The action this process dispatched, or '' when there is not one to name.
+     *
+     * @return string
+     */
+    private function fullActionName()
+    {
+        foreach (array('getFullActionName', 'getRouteName', 'getControllerName', 'getActionName') as $getter) {
+            if (!method_exists($this->_request, $getter)) {
+                return '';
+            }
+        }
+
+        foreach (array('getRouteName', 'getControllerName', 'getActionName') as $getter) {
+            $segment = $this->_request->$getter();
+            if ($segment !== null && !is_string($segment)) {
+                return '';
+            }
+        }
+
+        $action = $this->_request->getFullActionName();
+
+        return is_string($action) && preg_match('/[A-Za-z0-9]/', $action) ? $action : '';
+    }
+
+    /**
+     * @param  int|null $storeId
+     * @return array
+     */
+    private function getBindableAttributes($storeId = null)
+    {
+        $systemAtt = $this->getCustomerAtts($storeId);
+        // Not passed a store: getAddressAtt() composes a fixed list of address
+        // element names and gives every one of them an empty `options`, so
+        // there is nothing in it that a store view could change. Its shared
+        // memo is correct, and saying so here is cheaper than the next reader
+        // wondering why one of the two took a store and the other did not.
         $extraAtt = $this->getAddressAtt();
 
         // Note: We cannot use array_merge here because we need to hold
@@ -375,39 +595,84 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
 
         return $ret;
     }
-    private function getCustomerAtts()
+    /**
+     * The customer attributes a merge field can be mapped to, for a store view.
+     *
+     * Memoized per store view rather than once per process. The option labels
+     * inside each entry are store-scoped: Source\Table::getAllOptions() filters
+     * the option collection by the attribute's store id and, when the attribute
+     * carries none, falls back to whichever store view the store manager has
+     * current. Cron/Ecommerce sets a different current store on every pass of
+     * the loop it runs, so one shared memo froze the first view's labels for
+     * every view after it.
+     *
+     * Keying alone would not have been enough. The store id is also SET on each
+     * attribute before its source is asked, so the labels come from the store
+     * view that was requested rather than from whichever one happened to be
+     * current. Otherwise the memo would be keyed by one thing and filled from
+     * another, which is worse than not keying it at all, because it looks
+     * deliberate.
+     *
+     * Only attributes with a source are exposed, and on a stock install that is
+     * `gender` alone -- `website_id`, `store_id` and `group_id` have sources
+     * that build from websites, stores and customer groups rather than from
+     * store-scoped option labels. A merchant's own select attributes are the
+     * rest of it.
+     *
+     * @param  int|null $storeId
+     * @return array
+     */
+    private function getCustomerAtts($storeId = null)
     {
+        $key = $storeId === null ? 'default' : (string)$storeId;
+
+        if (array_key_exists($key, $this->customerAtt)) {
+            return $this->customerAtt[$key];
+        }
+
         $ret = [];
-        if (!$this->customerAtt) {
-            $collection = $this->_attCollection->create();
-            /**
-             * @var $item \Magento\Customer\Model\Attribute
-             */
-            foreach ($collection as $item) {
-                try {
-                    if ($item->usesSource()) {
-                        $options = $item->getSource()->getAllOptions();
-                    } else {
-                        $options = [];
+        $collection = $this->_attCollection->create();
+        /**
+         * @var $item \Magento\Customer\Model\Attribute
+         */
+        foreach ($collection as $item) {
+            try {
+                if ($item->usesSource()) {
+                    // Mutates the attribute model, which is safe only because
+                    // the collection above is built fresh on every call that
+                    // reaches this line -- a memo hit returns before it.
+                    // Hoisting or caching that collection for performance would
+                    // reintroduce cross-store leakage through a different door,
+                    // and nothing would fail when it did.
+                    //
+                    // Guarded on null so a caller that names no store keeps the
+                    // old fallback rather than being pinned silently to a store
+                    // it never asked for.
+                    if ($storeId !== null) {
+                        $item->setStoreId($storeId);
                     }
-                } catch (\Exception $e) {
+                    $options = $item->getSource()->getAllOptions();
+                } else {
                     $options = [];
                 }
-                $isDate = ($item->getBackendModel()==\Magento\Eav\Model\Entity\Attribute\Backend\Datetime::class) ? 1:0;
-                $isAddress = (
-                    $item->getBackendModel()==\Magento\Customer\Model\Customer\Attribute\Backend\Billing::class ||
-                    $item->getBackendModel()==\Magento\Customer\Model\Customer\Attribute\Backend\Shipping::class) ? 1:0;
-                $ret[$item->getId()] = [
-                    'attCode' => $item->getAttributeCode(),
-                    'isDate' =>$isDate,
-                    'isAddress' => $isAddress,
-                    'options'=>$options
-                ] ;
+            } catch (\Exception $e) {
+                $options = [];
             }
-
-            $this->customerAtt = $ret;
+            $isDate = ($item->getBackendModel()==\Magento\Eav\Model\Entity\Attribute\Backend\Datetime::class) ? 1:0;
+            $isAddress = (
+                $item->getBackendModel()==\Magento\Customer\Model\Customer\Attribute\Backend\Billing::class ||
+                $item->getBackendModel()==\Magento\Customer\Model\Customer\Attribute\Backend\Shipping::class) ? 1:0;
+            $ret[$item->getId()] = [
+                'attCode' => $item->getAttributeCode(),
+                'isDate' =>$isDate,
+                'isAddress' => $isAddress,
+                'options'=>$options
+            ] ;
         }
-        return $this->customerAtt;
+
+        $this->customerAtt[$key] = $ret;
+
+        return $ret;
     }
     private function getAddressAtt()
     {
@@ -420,12 +685,14 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                 'default_shipping##state',
                 'default_shipping##telephone',
                 'default_shipping##company',
+                'default_shipping##street',
                 'default_billing##zip',
                 'default_billing##country',
                 'default_billing##city',
                 'default_billing##state',
                 'default_billing##telephone',
-                'default_billing##company'
+                'default_billing##company',
+                'default_billing##street'
             ];
 
             foreach($elements as $item) {
@@ -442,33 +709,69 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
 
         return $this->addressAtt;
     }
-    public function resetMapFields()
+    /**
+     * The merge-field map for a store view.
+     *
+     * Memoized per store view and per `$options`, because the result depends on
+     * both and the memo used to depend on neither. `Cron/Ecommerce` loops every
+     * store view with one helper instance and the subscriber sync reaches this
+     * through getMergeVarsBySubscriber(), so a store-blind memo meant every
+     * view after the first synchronised with the FIRST view's field map --
+     * wrong merge fields written to Mailchimp, with nothing to show for it.
+     *
+     * `$options` is in the key for the same reason and is the less obvious
+     * half: it changes what each entry carries, and `bin/magento cron:run`
+     * executes every due job of a group in one process, so a caller that asked
+     * without options could be served to one that asked with them.
+     *
+     * A null store id memoizes under its own key. That is correct as long as
+     * the current store does not change between two such calls, and no caller
+     * passes null today -- all three name the store view they mean.
+     *
+     * @param  int|null $storeId
+     * @param  bool     $options
+     * @return array
+     */
+    public function getMapFields($storeId = null, $options = true)
     {
-        $this->_mapFields = null;
-    }
-    public function getMapFields($storeId = null)
-    {
-        if (!$this->_mapFields) {
-            $customerAtt = $this->getBindableAttributes();
-            $data = $this->getConfigValue(self::XML_MERGEVARS, $storeId);
-            try {
-                $data = $this->unserialize($data);
-                if (is_array($data)) {
-                    foreach ($data as $customerFieldId => $mailchimpName) {
-                        $this->_mapFields[] = [
-                            'mailchimp' => strtoupper($mailchimpName),
-                            'customer_field' => $customerAtt[$customerFieldId]['attCode'],
-                            'isDate' => $customerAtt[$customerFieldId]['isDate'],
-                            'isAddress' => $customerAtt[$customerFieldId]['isAddress'],
-                            'options' => $customerAtt[$customerFieldId]['options']
-                        ];
-                    }
-                }
-            } catch (\Exception $e) {
-                $this->log($e->getMessage());
-            }
+        $key = ($storeId === null ? 'default' : (string)$storeId) . '|' . ($options ? '1' : '0');
+
+        // array_key_exists, not a truthiness test: an install with nothing
+        // mapped produces an empty array, which is falsy, so the memo never
+        // fired in exactly the case it is cheapest to serve -- re-reading the
+        // attributes and unserialising on every call, for every subscriber in
+        // the batch.
+        if (array_key_exists($key, $this->_mapFields)) {
+            return $this->_mapFields[$key];
         }
-        return $this->_mapFields;
+
+        $mapFields = [];
+        $customerAtt = $this->getBindableAttributes($storeId);
+        $data = $this->getConfigValue(self::XML_MERGEVARS, $storeId);
+        try {
+            $data = $this->unserialize($data);
+            if (is_array($data)) {
+                foreach ($data as $customerFieldId => $mailchimpName) {
+                    $mapFields[] = [
+                        'mailchimp' => strtoupper($mailchimpName),
+                        'customer_field' => $customerAtt[$customerFieldId]['attCode'],
+                        'isDate' => $customerAtt[$customerFieldId]['isDate'],
+                        'isAddress' => $customerAtt[$customerFieldId]['isAddress'],
+                        'options' => $options ? $customerAtt[$customerFieldId]['options'] : false
+                    ];
+                }
+            }
+        } catch (\Exception $e) {
+            $this->log($e->getMessage());
+            // Not memoized: a map that failed to parse is not an empty map,
+            // and remembering it would make one bad read permanent for the
+            // process.
+            return $mapFields;
+        }
+
+        $this->_mapFields[$key] = $mapFields;
+
+        return $mapFields;
     }
     public function getDateFormat()
     {
@@ -488,7 +791,15 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         } else {
             $this->_api->setApiKey($apiKey);
         }
-        $this->_api->setUserAgent('Mailchimp4Magento' . (string)$this->getModuleVersion());
+
+        $this->_api->setUserAgent($this->userAgent());
+        $this->_api->setHelper($this);
+        $this->_api->setStoreURL($this->_storeManager->getStore()->getBaseUrl());
+        if (method_exists($this->_api, 'setMailchimpStoreId')) {
+            $this->_api->setMailchimpStoreId($this->getConfigValue(self::XML_MAILCHIMP_STORE));
+        }
+        $this->applySurface();
+
         return $this->_api;
     }
 
@@ -521,10 +832,123 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         }
         $this->_cacheTypeList->cleanType('config');
     }
-    public function getMCMinSyncing($storeId)
+
+    /**
+     * Write a config value now and leave the cache flush to the caller.
+     *
+     * saveConfigValue() flushes on every call, and a flush is not cheap: the
+     * config module intercepts it to re-read the whole system config and then
+     * serialise and encrypt every scope in turn, under a lock. That cost grows
+     * with the number of store views, so a job that writes once per view pays
+     * it once per view — quadratic work for what should be one refresh.
+     *
+     * Callers that write several values in one pass should use this and then
+     * call flushConfigCache() once. Nothing they write is visible to a read
+     * until they do, so this is only safe where the caller does not read back
+     * what it has just written.
+     *
+     * @param  string      $path
+     * @param  string      $value
+     * @param  int|null    $storeId
+     * @param  string|null $scope
+     * @return void
+     */
+    public function saveConfigValueWithoutCacheFlush($path, $value, $storeId = null, $scope = null)
     {
-        $ret = $this->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_IS_SYNC, $storeId);
-        return !$ret;
+        $this->saveConfigValueAtomic(
+            (string)$path,
+            (string)$value,
+            (string)($scope ?: \Magento\Store\Model\ScopeInterface::SCOPE_STORES),
+            (int)$storeId
+        );
+    }
+
+    /**
+     * Refresh the config cache once, after a run of deferred writes.
+     *
+     * @return void
+     */
+    public function flushConfigCache()
+    {
+        $this->_cacheTypeList->cleanType('config');
+    }
+
+    /**
+     * Atomically upsert a single config row using INSERT … ON DUPLICATE KEY UPDATE.
+     *
+     * core_config_data has a UNIQUE KEY on (scope, scope_id, path), so a plain
+     * INSERT … ON DUPLICATE KEY UPDATE is one round-trip and race-free — unlike
+     * Magento's ResourceModel\Config::saveConfig() which does a SELECT then
+     * INSERT/UPDATE (TOCTOU window under concurrent cron workers).
+     *
+     * Does NOT flush the config cache — callers that need an immediate cache
+     * refresh should call $this->_cacheTypeList->cleanType('config') themselves.
+     */
+    private function saveConfigValueAtomic(string $path, string $value, string $scope, int $scopeId): void
+    {
+        $table = $this->_resource->getTableName('core_config_data');
+        $this->_resource->getConnection()->insertOnDuplicate(
+            $table,
+            ['scope' => $scope, 'scope_id' => $scopeId, 'path' => $path, 'value' => $value],
+            ['value']
+        );
+    }
+
+    /**
+     * Write the issync flag for a Mailchimp store.
+     *
+     * Only the per-mailchimpStore path (issync/<mcStoreId>) is ever written.
+     * Writing the bare scalar issync alongside issync/<id> children at the
+     * same scope causes Magento\Framework\App\Config\Scope\Converter to throw
+     * "Cannot access offset of type string on string" — a site-wide fatal.
+     *
+     * The write is atomic (INSERT … ON DUPLICATE KEY UPDATE) to prevent the
+     * check-then-write race that produces duplicate core_config_data rows under
+     * concurrent cron workers.
+     *
+     * @param string $mailchimpStoreId
+     * @param string $value
+     * @param int    $scopeId
+     * @param string $scope
+     */
+    public function saveMCMinSyncing($mailchimpStoreId, $value, $scopeId = 0, $scope = 'default')
+    {
+        if (!$mailchimpStoreId) {
+            // Bare-scalar write intentionally removed — see docblock above.
+            return;
+        }
+        $this->saveConfigValueAtomic(
+            self::XML_PATH_IS_SYNC . '/' . $mailchimpStoreId,
+            (string) $value,
+            (string) $scope,
+            (int) $scopeId
+        );
+        // saveConfigValueAtomic writes straight to the table; flush the config
+        // cache so the freshly written flag is visible to the next read (the cart
+        // sync gate depends on this).
+        $this->_cacheTypeList->cleanType('config');
+    }
+
+    /**
+     * Clear the "initial sync complete" flag for a Mailchimp store. After a store
+     * is deleted/reset the cart sync must stay blocked until the store has fully
+     * re-synced, so the per-store issync/<id> flag is removed here.
+     *
+     * @param string $mailchimpStoreId
+     * @param int $scopeId
+     * @param string $scope
+     */
+    public function deleteMCMinSyncing($mailchimpStoreId, $scopeId = 0, $scope = 'default')
+    {
+        if (!$mailchimpStoreId) {
+            return;
+        }
+        $this->deleteConfig(
+            self::XML_PATH_IS_SYNC . '/' . $mailchimpStoreId,
+            (int) $scopeId,
+            (string) $scope
+        );
+        $this->_cacheTypeList->cleanType('config');
     }
     public function getCartUrl($storeId, $cartId, $token)
     {
@@ -573,12 +997,20 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     }
 
     /**
+     * Order statuses that may be synced to Mailchimp; an empty list means all statuses.
+     *
      * @param null $store
-     * @return string[]|array
+     * @return string[]
      */
     public function getSynchronizableOrderStatuses($store = null)
     {
-        return explode(',', $this->getConfigValue(self::XML_ECOMMERCE_SYNCHRONIZABLE_STATUSES, $store));
+        $statuses = (string)$this->getConfigValue(self::XML_ECOMMERCE_SYNCHRONIZABLE_STATUSES, $store);
+        return array_values(array_filter(explode(',', $statuses), 'strlen'));
+    }
+
+    public function isNewsletterModuleEnabled()
+    {
+        return $this->_moduleManager->isEnabled('Magento_Newsletter');
     }
 
     /**
@@ -599,7 +1031,14 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
             $this->_mlogger->mailchimpLog($message, $file);
         }
     }
+    public function saveNotification($data)
+    {
+        $mailchimpNotification = $this->mailchimpNotificationFactory->create();
+        $mailchimpNotification->setNotificationData(json_encode($data));
+        $mailchimpNotification->setProcessed(false);
+        $mailchimpNotification->getResource()->save($mailchimpNotification);
 
+    }
     /**
      * @return string
      * @throws \Magento\Framework\Exception\LocalizedException
@@ -619,7 +1058,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
 //            $storeId = $this->getConfigValue(self::XML_MAILCHIMP_STORE);
             $this->getApi()->ecommerce->stores->delete($mailchimpStore);
             $this->cancelAllPendingBatches($mailchimpStore);
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->log($e->getFriendlyMessage());
         } catch (Exception $e) {
             $this->log($e->getMessage());
@@ -646,16 +1085,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         $this->markAllBatchesAs($mailchimpStore, self::BATCH_CANCELED, self::BATCH_PENDING);
     }
 
-    public function markRegisterAsModified($registerId, $type)
-    {
-        if (!empty($registerId)) {
-            $this->_mailChimpSyncE->markAllAsModified($registerId, $type);
-        }
-    }
-    public function markAllAsModifiedByIds($mailchimpStoreId, $ids, $type)
-    {
-        $this>$this->_mailChimpSyncE->markAllAsModifiedByIds($mailchimpStoreId, $ids, $type);
-    }
     public function getMCStoreName($storeId)
     {
         return $this->_storeManager->getStore($storeId)->getFrontendName();
@@ -666,10 +1095,19 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     }
     public function getMCMinSyncDateFlag($storeId = null)
     {
-        $syncDate = $this->getConfigValue(self::XML_PATH_SYNC_DATE, $storeId);
-        if ($syncDate=='') {
+        $syncDate = $this->getConfigValue(self::XML_PATH_IS_SYNC, $storeId);
+        // When a per-Mailchimp-store flag has been written under issync/<mailchimpStoreId>
+        // at default scope, this path resolves to an array for any store with no scalar
+        // override of its own. Such a store has not recorded a completion date, so treat
+        // it as "not yet synced" instead of returning the array to the callers.
+        if (is_array($syncDate) || $syncDate === null || $syncDate == '') {
             $syncDate = '1900-01-01';
         }
+        return $syncDate;
+    }
+    public function getMCMinSyncDateFlagByMailchimpStore($mailchimpStoreId = null, $storeId = null, $scope = null)
+    {
+        $syncDate = $this->getConfigValue(self::XML_PATH_IS_SYNC. "/$mailchimpStoreId", $storeId, $scope);
         return $syncDate;
     }
     public function getBaseDir()
@@ -724,7 +1162,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                         } elseif (count($map['options'])) {
                             foreach ($map['options'] as $option) {
                                 if ($option['value'] == $value) {
-                                    $value = $option['label'];
+                                    $value = __($option['label']);
                                     break;
                                 }
                             }
@@ -734,6 +1172,8 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
 
                 if (!empty($value)) {
                     $mergeVars[$map['mailchimp']] = $value;
+                } else {
+                    $mergeVars[$map['mailchimp']] = '';
                 }
             }
         }
@@ -751,11 +1191,10 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         if ($address) {
             $street = $address->getStreet();
             if (count($street) > 1) {
-                $addressData["addr1"] = $street[0];
-                $addressData["addr2"] = $street[1];
+                $addressData["street"] = $street[0].' '.$street[1];
             } else {
                 if (!empty($street[0])) {
-                    $addressData["addr1"] = $street[0];
+                    $addressData["street"] = $street[0];
                 }
             }
             if ($address->getCity()) {
@@ -772,7 +1211,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
             }
             if ($address->getCountry()) {
                 $country = $this->countryFactory->create()->loadByCode($address->getCountryId());
-                $addressData["country"] = $country->getName($this->resolver->getLocale());
+                $addressData["country"] = $country->getName('en_US');
             }
             if ($address->getTelephone()) {
                 $addressData['telephone'] = $address->getTelephone();
@@ -828,7 +1267,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
             if (isset($store['list_id'])) {
                 return $store['list_id'];
             }
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->log($e->getFriendlyMessage());
         }
         return null;
@@ -842,95 +1281,10 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         $date = date('Y-m-d-H-i-s') . '-' . $msecArray[1];
         return $date;
     }
-    public function resetErrors($mailchimpStore, $retry)
-    {
-        try {
-            // clean the errors table
-            $connection = $this->_mailChimpErrors->getResource()->getConnection();
-            $tableName = $this->_mailChimpErrors->getResource()->getMainTable();
-            $connection->delete($tableName, "mailchimp_store_id = '".$mailchimpStore."'");
-            // clean the syncecommerce table with errors
-            if ($retry) {
-                $connection = $this->_mailChimpSyncE->getResource()->getConnection();
-                $tableName = $this->_mailChimpSyncE->getResource()->getMainTable();
-                $connection->delete(
-                    $tableName,
-                    "mailchimp_store_id = '" . $mailchimpStore . "' and mailchimp_sync_error is not null"
-                );
-            }
-        } catch (\Zend_Db_Exception $e) {
-            throw new ValidatorException(__($e->getMessage()));
-        }
-    }
-    public function resetEcommerce()
-    {
-        $this->resetErrors();
-    }
-    public function saveEcommerceData(
-        $storeId,
-        $entityId,
-        $type,
-        $date = null,
-        $error = null,
-        $modified = null,
-        $deleted = null,
-        $token = null,
-        $sent = null
-    ) {
-        if (!empty($entityId)) {
-            $chimpSyncEcommerce = $this->getChimpSyncEcommerce($storeId, $entityId, $type);
-            if ($chimpSyncEcommerce->getRelatedId() == $entityId ||
-                !$chimpSyncEcommerce->getRelatedId() && $modified != 1) {
-                $chimpSyncEcommerce->setMailchimpStoreId($storeId);
-                $chimpSyncEcommerce->setType($type);
-                $chimpSyncEcommerce->setRelatedId($entityId);
-                if ($modified!==null) {
-                    $chimpSyncEcommerce->setMailchimpSyncModified($modified);
-                } else {
-                    $chimpSyncEcommerce->setMailchimpSyncModified(0);
-                }
-                if ($date) {
-                    $chimpSyncEcommerce->setMailchimpSyncDelta($date);
-                } elseif ($modified != 1) {
-                    $chimpSyncEcommerce->setBatchId(null);
-                }
-                if ($error) {
-                    $chimpSyncEcommerce->setMailchimpSyncError($error);
-                }
-                if ($deleted) {
-                    $chimpSyncEcommerce->setMailchimpSyncDeleted($deleted);
-                    $chimpSyncEcommerce->setMailchimpSyncModified(0);
-                }
-                if ($token) {
-                    $chimpSyncEcommerce->setMailchimpToken($token);
-                }
-                if ($sent) {
-                    $chimpSyncEcommerce->setMailchimpSent($sent);
-                }
-                $chimpSyncEcommerce->getResource()->save($chimpSyncEcommerce);
-            }
-        }
-    }
 
-    public function markEcommerceAsDeleted($relatedId, $type, $relatedDeletedId = null)
-    {
-        $this->_mailChimpSyncE->markAllAsDeleted($relatedId, $type, $relatedDeletedId);
-    }
-    public function ecommerceDeleteAllByIdType($id, $type, $mailchimpStoreId)
-    {
-        $this->_mailChimpSyncE->deleteAllByIdType($id, $type, $mailchimpStoreId);
-    }
-    public function deleteAllByBatchId($batchId)
-    {
-        $this->_mailChimpSyncE->deleteAllByBatchid($batchId);
-    }
-    public function getChimpSyncEcommerce($storeId, $id, $type)
-    {
-        $chimp = $this->_mailChimpSyncEcommerce->create();
-        return $chimp->getByStoreIdType($storeId, $id, $type);
-    }
     public function loadStores()
     {
+
         $mcUserName = [];
         $allStores = [];
         $connection = $this->_mailChimpStores->getResource()->getConnection();
@@ -942,20 +1296,27 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                 continue;
             }
             $this->_api->setApiKey(trim($apiKey));
-            $this->_api->setUserAgent('Mailchimp4Magento' . (string)$this->getModuleVersion());
+            $this->_api->setUserAgent($this->userAgent());
+            $this->applySurface();
+            $this->_api->setHelper($this);
+            // Must stay after setApiKey. That call is what opens the library's
+            // telemetry bucket, and setStoreURL() writes into an already-open
+            // bucket rather than keeping a copy on the instance -- so moved
+            // above it this line is silently lost and the bucket reports with
+            // no site attached. Verified: before setApiKey the URL comes
+            // through NULL, after it comes through set.
+            $this->_api->setStoreURL($this->_storeManager->getStore()->getBaseUrl());
+
 
             try {
                 $apiStores = $this->_api->ecommerce->stores->get(null, null, null, self::MAXSTORES);
-            } catch (\Mailchimp_Error $mailchimpError) {
-                $this->log($mailchimpError->getFriendlyMessage());
-                continue;
-            } catch (\Mailchimp_HttpError $mailchimpError) {
-                $this->log($mailchimpError->getMessage());
+            } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
+                $this->log($e->getFriendlyMessage());
                 continue;
             }
 
             foreach ($apiStores['stores'] as $store) {
-                if ($store['platform']!=self::PLATFORM||array_key_exists($store['list_id'],$allStores)) {
+                if ($store['platform']!=self::PLATFORM||in_array($store['id'],$allStores)) {
                     continue;
                 }
                 if (isset($store['connected_site'])) {
@@ -963,7 +1324,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                 } else {
                     $name = $store['name'].' (Warning: not connected)';
                 }
-                $allStores['list_id'] = $store['list_id'];
+                $allStores[] = $store['id'];
                 $mstore = $this->_mailChimpStoresFactory->create();
                 $mstore->setApikey($this->_encryptor->encrypt(trim($apiKey)));
                 $mstore->setStoreid($store['id']);
@@ -990,13 +1351,30 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                     $mcUserName[$apiKey] = $mcInfo['account_name'];
                 }
                 try {
-                    $listInfo = $this->_api->lists->getLists($store['list_id']);
+                    // `total_contacts` is returned only when
+                    // include_total_contacts is set, so a caller that needs it
+                    // has to ask on every read. Asking only on the statistics
+                    // cron leaves every other single-audience read returning a
+                    // response without it.
+                    $listInfo = $this->_api->lists->getLists(
+                        $store['list_id'],
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        true
+                    );
                     if (isset($listInfo['name'])) {
                         $mstore->setListName($listInfo['name']);
                         $mstore->setMcAccountName($mcUserName[$apiKey]);
                         $mstore->getResource()->save($mstore);
                     }
-                } catch (\Mailchimp_Error $e) {
+                } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
                     $this->log($e->getFriendlyMessage());
                 }
             }
@@ -1020,7 +1398,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                         $storeId
                     );
                 }
-            } catch (\Mailchimp_Error $e) {
+            } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
                 $this->log($e->getFriendlyMessage());
             }
         }
@@ -1031,23 +1409,138 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         $url = $this->getConfigValue(self::XML_MAILCHIMP_JS_URL, $storeId);
         if ($this->getConfigValue(self::XML_PATH_ACTIVE, $storeId) && !$url) {
             $mailChimpStoreId = $this->getConfigValue(self::XML_MAILCHIMP_STORE, $storeId);
+
+            // Two ways to hold a value that is not a store, and both reach
+            // here. -1 is the dropdown's placeholder, left behind by a
+            // merchant who never chose one; 0 is the '---No Data---' option
+            // MonkeyStore offers when there is no API key at that scope or the
+            // listing failed. This runs during page render, so without this
+            // guard every uncached visit pays to be told so again.
+            //
+            // 0 is the quieter of the two and worth the falsy check rather
+            // than another == comparison: the library branches on if($id), so
+            // a 0 does not even ask for that store -- it lists them, gets a
+            // 200 with no connected_site, saves nothing, and repeats with no
+            // error to notice it by.
+            if (!$mailChimpStoreId || $mailChimpStoreId == -1) {
+                return $url;
+            }
+
+            // A store id that is real but does not resolve passes the guard
+            // above and fails below, writing nothing -- so without a marker
+            // the next render repeats it, and so does the one after that. It
+            // gets there by being deleted on Mailchimp's side, by arriving in
+            // a restored database that points at another account, by having no
+            // connected site, or by its key being revoked.
+            //
+            // The widest case is not merchant error at all. While Mailchimp is
+            // down or slow, every uncached render of every store using the
+            // pixel blocks on curl until the library's timeout before the page
+            // is served, cart and checkout included. That is what this bounds:
+            // one attempt per store view per window, rather than one per
+            // visitor.
+            if ($this->jsUrlLookupFailedRecently($storeId)) {
+                return $url;
+            }
+
             try {
                 $api = $this->getApi($storeId);
                 $storeData = $api->ecommerce->stores->get($mailChimpStoreId);
                 if (isset($storeData['connected_site']['site_script']['url'])) {
                     $url = $storeData['connected_site']['site_script']['url'];
-                    $this->_config->saveConfig(
-                        self::XML_MAILCHIMP_JS_URL,
-                        $url,
-                        \Magento\Store\Model\ScopeInterface::SCOPE_STORES,
-                        $storeId
-                    );
+                    // Through the helper, which flushes the config cache. The
+                    // raw saveConfig used to leave the cache serving the old
+                    // empty value, so the very next render read !$url as true
+                    // and called again -- a successful lookup that never
+                    // stopped asking, and left no error behind to notice.
+                    $this->saveConfigValue(self::XML_MAILCHIMP_JS_URL, $url, $storeId);
+                } else {
+                    // A 200 carrying no URL -- the store exists but has no
+                    // connected site. The quietest of the failures: nothing
+                    // throws, nothing is logged and nothing is written, so it
+                    // needs the marker at least as much as the loud ones.
+                    $this->rememberJsUrlLookupFailed($storeId);
                 }
-            } catch (\Mailchimp_Error $e) {
+            } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
+                // Mailchimp_HttpError is what the library throws on a curl
+                // failure as well as on an HTTP one, so marking here is what
+                // covers the outage, not just the 404 and the 401.
+                $this->rememberJsUrlLookupFailed($storeId);
                 $this->log($e->getFriendlyMessage());
             }
         }
         return $url;
+    }
+
+    /**
+     * Whether this store view's lookup failed recently enough not to retry.
+     *
+     * The cache is optional so that a helper built without it -- an older
+     * di.xml, a unit test constructing it by hand -- keeps the behaviour it had
+     * before this existed rather than fataling.
+     *
+     * @param  int|string $storeId
+     * @return bool
+     */
+    private function jsUrlLookupFailedRecently($storeId)
+    {
+        if ($this->_cache === null) {
+            return false;
+        }
+
+        return (bool)$this->_cache->load($this->jsUrlFailureCacheId($storeId));
+    }
+
+    /**
+     * Remember that this store view's lookup failed, for JS_URL_FAILURE_TTL.
+     *
+     * @param  int|string $storeId
+     * @return void
+     */
+    private function rememberJsUrlLookupFailed($storeId)
+    {
+        if ($this->_cache === null) {
+            return;
+        }
+
+        $this->_cache->save(
+            '1',
+            $this->jsUrlFailureCacheId($storeId),
+            [self::JS_URL_FAILURE_CACHE_TAG],
+            self::JS_URL_FAILURE_TTL
+        );
+    }
+
+    /**
+     * Drop every remembered failure, so the next render asks again.
+     *
+     * Called from the two admin paths that change what the lookup would
+     * answer: saving a different Mailchimp store, and the "Fix Mailchimp JS"
+     * button. Both are rare and deliberate, so dropping all of the markers
+     * instead of working out which store views the change reaches costs at
+     * most one call per store view on the next render -- which is exactly what
+     * those store views paid on every render before this existed.
+     *
+     * @return void
+     */
+    public function clearJsUrlFailures()
+    {
+        if ($this->_cache === null) {
+            return;
+        }
+
+        $this->_cache->clean([self::JS_URL_FAILURE_CACHE_TAG]);
+    }
+
+    /**
+     * Cache id of the failure marker for one store view.
+     *
+     * @param  int|string $storeId
+     * @return string
+     */
+    private function jsUrlFailureCacheId($storeId)
+    {
+        return 'mailchimp_js_url_failed_' . (int)$storeId;
     }
 
     public function getWebhooksKey()
@@ -1072,7 +1565,10 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         $sources = [
             'user' => true,
             'admin' => true,
-            'api' => true
+            // Do not subscribe to API-originated events: the extension writes members
+            // through the API (customer/subscriber sync), and echoing those changes back
+            // as webhooks creates a feedback loop that recreates newsletter subscribers.
+            'api' => false
         ];
         try {
             $api = $this->getApiByApiKey($apikey);
@@ -1083,7 +1579,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                 '_secure' => true]);
             // the urlencode of the hookUrl not work
             $ret = $api->lists->webhooks->add($listId, $hookUrl, $events, $sources);
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->log($e->getFriendlyMessage());
             $ret ['message']= $e->getMessage();
         }
@@ -1107,7 +1603,7 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                     }
                 }
             }
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->log($e->getFriendlyMessage());
         }
     }
@@ -1170,8 +1666,12 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
      */
     public function getTableName($tableName, $conn = ResourceConnection::DEFAULT_CONNECTION)
     {
-        $dbName = $this->_deploymentConfig->get("db/connection/$conn/dbname");
-        return $dbName.'.'.$this->_resource->getTableName($tableName, $conn);
+        $connection = $this->_resource->getConnection($conn);
+        $tablePrefix = $this->_resource->getTablePrefix();
+        if ($tablePrefix && strpos($tableName, $tablePrefix) !== 0) {
+            $tableName = $tablePrefix . $tableName;
+        }
+         return $connection->getTableName($tableName, $conn);
     }
     public function getWebsiteId($storeId)
     {
@@ -1186,9 +1686,27 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
         } else {
             $interest = [];
         }
+
+        // Nothing below can use the answer when no groups are selected: the
+        // first loop matches against an empty list and the second iterates
+        // one, so $rc comes back empty however the call goes. This is the
+        // quiet majority -- an audience configured and no groups chosen is
+        // the default state of an install that never used them.
+        if (!$interest) {
+            return $rc;
+        }
+
+        // And the audience id has the same placeholder problem as the store
+        // id: -1 is the dropdown's, and an empty value builds
+        // `lists//interest-categories`. Cron/Webhook guards this exact call
+        // the same way.
+        $listId = $this->getConfigValue(self::XML_PATH_LIST, $storeId);
+        if (!$listId || $listId == -1) {
+            return $rc;
+        }
+
         try {
             $api = $this->getApi($storeId);
-            $listId = $this->getConfigValue(self::XML_PATH_LIST, $storeId);
             $allInterest = $api->lists->interestCategory->getAll($listId, null, null, 200);
             if (is_array($allInterest) &&
                 array_key_exists('categories', $allInterest) &&
@@ -1210,14 +1728,19 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                 $this->log(__('Error retrieving interest groups for store ').$storeId);
                 $rc = [];
             }
-        } catch (\Mailchimp_Error $e) {
+        } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
             $this->log($e->getFriendlyMessage());
         }
         return $rc;
     }
     public function getSubscriberInterest($subscriberId, $storeId, $interest = null)
     {
-        if (!$interest) {
+        // Strictly null, because [] is an answer and not an absence. Read as
+        // falsy it meant "the caller supplied nothing", so a store with no
+        // groups configured -- where this legitimately returns [] -- re-asked
+        // Mailchimp once per subscriber, on a successful call, with nothing to
+        // show for it and no error to notice it by.
+        if ($interest === null) {
             $interest = $this->getInterest($storeId);
         }
         /**
@@ -1254,7 +1777,9 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
                         }
                     }
                 }
-            } catch (\Exception $e) {
+            } catch (\Mailchimp_Error | \Mailchimp_HttpError $e) {
+                $this->log($e->getFriendlyMessage());
+            } catch (Exception $e) {
                 $this->log($e->getMessage());
             }
         }
@@ -1287,20 +1812,25 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
             $this->counters[$index] = 1;
         }
     }
-    public function resetCounters()
+    public function resetCounters($storeId = null)
     {
+        $this->counters = [];
         $this->counters = [
             self::SUB_NEW => 0,
             self::SUB_MOD => 0,
             self::ORD_NEW => 0,
             self::ORD_MOD => 0,
             self::PRO_NEW => 0,
+            self::PRO_DELETED => 0,
             self::PRO_MOD => 0,
-            self::CUS_NEW => 0,
-            self::CUS_MOD => 0,
             self::QUO_NEW => 0,
             self::QUO_MOD => 0
         ];
+        if ($this->getConfigValue(\Ebizmarts\MailChimp\Helper\Data::XML_PATH_ALL_CUSTOMERS, $storeId)) {
+            $this->counters [self::CUS_NEW] = 0;
+            $this->counters [self::CUS_MOD] = 0;
+        }
+
     }
     public function getCounters()
     {
@@ -1335,30 +1865,6 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
             $storeId
         );
     }
-    public function isNewsletterModuleEnabled()
-    {
-        return $this->_moduleManager->isEnabled('Magento_Newsletter');
-    }
-    public function resyncAllSubscribers($mailchimpList)
-    {
-        $connection = $this->_mailChimpSyncE->getResource()->getConnection();
-        $tableName = $this->_mailChimpSyncE->getResource()->getMainTable();
-        $connection->update(
-            $tableName,
-            ['mailchimp_sync_modified' => 1],
-            "type = '" . self::IS_SUBSCRIBER . "' and mailchimp_store_id = '$mailchimpList'"
-        );
-    }
-    public function resyncProducts($mailchimpList)
-    {
-        $connection = $this->_mailChimpSyncE->getResource()->getConnection();
-        $tableName = $this->_mailChimpSyncE->getResource()->getMainTable();
-        $connection->update(
-            $tableName,
-            ['mailchimp_sync_modified' => 1],
-            "type = '" . self::IS_PRODUCT . "' and mailchimp_store_id = '$mailchimpList'"
-        );
-    }
     public function decrypt($value)
     {
         return $this->_encryptor->decrypt($value);
@@ -1366,5 +1872,179 @@ class Data extends \Magento\Framework\App\Helper\AbstractHelper
     public function encrypt($value)
     {
         return $this->_encryptor->encrypt($value);
+    }
+    public function buttonPressed($button, $result)
+    {
+        $data = [];
+        $data['storeURL'] = $this->_storeManager->getStore()->getBaseUrl();
+        $data['time'] = $this->getGmtDate();
+        $data['button']['action'] = $button;
+        $data['button']['result'] = $result;
+        $this->saveNotification($data);
+    }
+    public function switchLog($on)
+    {
+        $storeId = $this->_storeManager->getDefaultStoreView()->getId();
+        $scope = 'default';
+        $token = $this->getConfigValue(self::XML_STATISTICS_TOKEN, $storeId, $scope);
+
+    }
+
+    /**
+     * @param \Magento\Quote\Model\Quote $quote
+     * @return void
+     */
+    public function sendCartEvent($quote)
+    {
+        $storeId = $quote->getStoreId();
+        $api = $this->getApi($storeId);
+        $list = $this->getDefaultList($storeId);
+        $customerMailchimpId = hash('md5', strtolower($quote->getCustomerEmail()));
+        $properties = [];
+        $properties['quote_id'] = $quote->getId();
+        $properties['store_id'] = $this->getConfigValue(self::XML_MAILCHIMP_STORE, $storeId);
+        $properties['customer_email'] = $quote->getCustomerEmail();
+        $properties['total'] = $quote->getGrandTotal();
+        $properties['currency'] = $quote->getQuoteCurrencyCode();
+        $properties['customer_id'] = $quote->getCustomerId();
+        $api->lists->members->memberEvent->add($list, $customerMailchimpId, "abandoned_cart_visit",$properties,false,$this->getGmtDate());
+    }
+
+    /**
+     * Returns true when the Mailchimp Pixel is enabled for the given store.
+     *
+     * @param int $storeId
+     * @return bool
+     */
+    public function isPixelEnabled($storeId)
+    {
+        return (bool)$this->getConfigValue(self::XML_PIXEL_ENABLED_FOR_STORE, $storeId);
+    }
+
+    /**
+     * Whether this store view is connected to a Mailchimp store.
+     *
+     * One definition, called by both the form that locks the Pixel toggle and
+     * the hook that turns the Pixel on when a store view connects. Two
+     * definitions of "connected" drift, and the two ways they drift are both
+     * silent: a toggle that is never postable on a view the hook treats as
+     * connected, or a view the form opens up and the hook never provisions.
+     *
+     * The store dropdown offers two values that are not stores -- `-1`, its
+     * placeholder, and `0`, the "---No Data---" fallback it shows when there is
+     * no API key at this scope or the store listing threw (see
+     * Model/Config/Source/MonkeyStore). Neither is a connection, and the
+     * backend model already refuses to persist them while ecommerce is on.
+     *
+     * @param  int|null $storeId
+     * @return bool
+     */
+    public function isStoreConnected($storeId = null)
+    {
+        if (!$this->isMailChimpEnabled($storeId)) {
+            return false;
+        }
+
+        $mailchimpStoreId = (string)$this->getConfigValue(self::XML_MAILCHIMP_STORE, $storeId);
+
+        return $mailchimpStoreId !== '' && $mailchimpStoreId !== '-1' && $mailchimpStoreId !== '0';
+    }
+
+    /**
+     * Returns the Pixel SDK script URL saved for the given store.
+     *
+     * @param int $storeId
+     * @return string
+     */
+    public function getPixelScriptUrl($storeId)
+    {
+        return (string)$this->getConfigValue(self::XML_PIXEL_SCRIPT_URL, $storeId);
+    }
+
+    /**
+     * The user agent every call to the Mailchimp API carries.
+     *
+     * `Mailchimp4Magento103.4.82` reads to the eye as though the number were
+     * the Magento version. It is the module's. The platform version is added
+     * with a slash so the two cannot be confused by a reader or by a parser,
+     * and so it stays absent rather than wrong on a host that cannot answer.
+     *
+     * Built in one place because the three callers were byte-identical and a
+     * fourth would have had nothing to copy from but one of them.
+     *
+     * @return string
+     */
+    private function userAgent()
+    {
+        $agent = 'Mailchimp4Magento' . (string)$this->getModuleVersion();
+
+        try {
+            $magento = (string)$this->productMetadata->getVersion();
+        } catch (\Throwable $t) {
+            // One arm covers both: Exception implements Throwable, and this
+            // module's floor is Magento 2.4, so PHP 7 or newer is guaranteed.
+            return $agent;
+        }
+
+        if ($magento === '') {
+            return $agent;
+        }
+
+        return $agent . ' Magento/' . $magento;
+    }
+
+    /**
+     * Remember that this store's API key failed, so callers can stop asking.
+     *
+     * Keyed on the credential rather than on the store, which is the whole
+     * point: one key shared across many store views is exactly the shape that
+     * turns a single rejection into one round trip per view.
+     *
+     * @param  int|null    $store
+     * @param  string|null $scope
+     * @return void
+     */
+    public function markApiKeyFailed($store = null, $scope = null)
+    {
+        $fingerprint = $this->apiKeyFingerprint($store, $scope);
+        if ($fingerprint !== null) {
+            $this->failedApiKeys[$fingerprint] = true;
+        }
+    }
+
+    /**
+     * Whether this store's API key has already failed in this process.
+     *
+     * @param  int|null    $store
+     * @param  string|null $scope
+     * @return bool
+     */
+    public function isApiKeyFailed($store = null, $scope = null)
+    {
+        $fingerprint = $this->apiKeyFingerprint($store, $scope);
+
+        return $fingerprint !== null && isset($this->failedApiKeys[$fingerprint]);
+    }
+
+    /**
+     * A stable handle for a key that never holds the key itself.
+     *
+     * Null for an empty key: a store with nothing configured has no credential
+     * to blame, and lumping them all under one empty fingerprint would let an
+     * unconfigured store silence a configured one.
+     *
+     * @param  int|null    $store
+     * @param  string|null $scope
+     * @return string|null
+     */
+    private function apiKeyFingerprint($store = null, $scope = null)
+    {
+        $apiKey = (string)$this->getApiKey($store, $scope);
+        $apiKey = trim($apiKey);
+        if ($apiKey === '') {
+            return null;
+        }
+
+        return hash('sha256', $apiKey);
     }
 }

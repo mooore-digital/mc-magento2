@@ -5,13 +5,15 @@
  * @copyright Copyright © 2017 Ebizmarts Corp.. All rights reserved.
  * @author    info@ebizmarts.com
  */
- 
+
 namespace Ebizmarts\MailChimp\Controller\Cart;
 
 use Magento\Framework\App\Action\Action;
 use Magento\Framework\Controller\ResultFactory;
 use Magento\Framework\View\Result\PageFactory;
 use Magento\Framework\App\Action\Context;
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
+use Ebizmarts\MailChimp\Model\RedirectUrlValidator;
 
 class Loadquote extends Action
 {
@@ -32,6 +34,10 @@ class Loadquote extends Action
      */
     protected $_helper;
     /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
+    /**
      * @var \Magento\Framework\Url
      */
     protected $_urlHelper;
@@ -47,17 +53,22 @@ class Loadquote extends Action
      * @var \Magento\Checkout\Model\Session
      */
     protected $_checkoutSession;
+    /**
+     * @var RedirectUrlValidator
+     */
+    private $redirectUrlValidator;
 
     /**
-     * Loadquote constructor.
      * @param Context $context
      * @param PageFactory $pageFactory
      * @param \Magento\Quote\Model\QuoteFactory $quote
      * @param \Magento\Customer\Model\Session $customerSession
      * @param \Magento\Checkout\Model\Session $checkoutSession
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param SyncHelper $syncHelper
      * @param \Magento\Framework\Url $urlHelper
      * @param \Magento\Customer\Model\Url $customerUrl
+     * @param RedirectUrlValidator $redirectUrlValidator
      */
     public function __construct(
         Context $context,
@@ -66,18 +77,22 @@ class Loadquote extends Action
         \Magento\Customer\Model\Session $customerSession,
         \Magento\Checkout\Model\Session $checkoutSession,
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        SyncHelper $syncHelper,
         \Magento\Framework\Url $urlHelper,
-        \Magento\Customer\Model\Url $customerUrl
+        \Magento\Customer\Model\Url $customerUrl,
+        RedirectUrlValidator $redirectUrlValidator
     ) {
-    
+
         $this->pageFactory      = $pageFactory;
         $this->_quote           = $quote;
         $this->_customerSession = $customerSession;
         $this->_helper          = $helper;
+        $this->syncHelper       = $syncHelper;
         $this->_urlHelper       = $urlHelper;
         $this->_message         = $context->getMessageManager();
         $this->_customerUrl     = $customerUrl;
         $this->_checkoutSession = $checkoutSession;
+        $this->redirectUrlValidator = $redirectUrlValidator;
         parent::__construct($context);
     }
 
@@ -99,12 +114,15 @@ class Loadquote extends Action
                 \Ebizmarts\MailChimp\Helper\Data::XML_MAILCHIMP_STORE,
                 $magentoStoreId
             );
-            $syncCommerce = $this->_helper->getChimpSyncEcommerce(
+            $syncCommerce = $this->syncHelper->getChimpSyncEcommerce(
                 $mailchimpStoreId,
                 $params['id'],
                 \Ebizmarts\MailChimp\Helper\Data::IS_QUOTE
             );
-            if (!isset($params['token']) || $params['token'] != $syncCommerce->getMailchimpToken()) {
+            $storedToken = $syncCommerce->getMailchimpToken();
+            if (!isset($params['token']) || empty($storedToken)
+                || !hash_equals((string)$storedToken, (string)$params['token'])
+            ) {
                 // @error
                 $this->_message->addErrorMessage(__("You can't access this cart"));
                 $url = $this->_urlHelper->getUrl(
@@ -113,7 +131,7 @@ class Loadquote extends Action
                         $magentoStoreId
                     )
                 );
-                $this->_redirect($url);
+                $this->_redirect($this->redirectUrlValidator->getSafeUrl($url, $magentoStoreId));
             } else {
                 if (isset($params['mc_cid'])) {
                     $url = $this->_urlHelper->getUrl(
@@ -135,12 +153,13 @@ class Loadquote extends Action
                 $quote->setData('mailchimp_abandonedcart_flag', true);
 
                 $quote->getResource()->save($quote);
+                $this->_helper->sendCartEvent($quote);
                 if (!$quote->getCustomerId()) {
                     $this->_checkoutSession->setQuoteId($quote->getId());
-                    $this->_redirect($url);
+                    $this->_redirect($this->redirectUrlValidator->getSafeUrl($url, $magentoStoreId));
                 } else {
                     if ($this->_customerSession->isLoggedIn()) {
-                        $this->_redirect($url);
+                        $this->_redirect($this->redirectUrlValidator->getSafeUrl($url, $magentoStoreId));
                     } else {
                         $this->_message->addNoticeMessage(__("Login to complete your order"));
                         if (isset($params['mc_cid'])) {
@@ -151,7 +170,7 @@ class Loadquote extends Action
                         } else {
                             $url = $this->_customerUrl->getLoginUrl();
                         }
-                        $this->_redirect($url);
+                        $this->_redirect($this->redirectUrlValidator->getSafeUrl($url, $magentoStoreId));
                     }
                 }
             }

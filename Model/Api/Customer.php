@@ -14,8 +14,7 @@
 namespace Ebizmarts\MailChimp\Model\Api;
 
 use Magento\Directory\Model\CountryFactory;
-use Magento\Framework\Exception\State\ExpiredException;
-use Symfony\Component\Config\Definition\Exception\Exception;
+use Ebizmarts\MailChimp\Helper\Sync as SyncHelper;
 
 class Customer
 {
@@ -53,10 +52,14 @@ class Customer
      * @var string
      */
     protected $_batchId;
+    /**
+     * @var SyncHelper
+     */
+    private $syncHelper;
 
     /**
-     * Customer constructor.
      * @param \Ebizmarts\MailChimp\Helper\Data $helper
+     * @param SyncHelper $syncHelper
      * @param \Magento\Customer\Model\CustomerFactory $customerFactory
      * @param \Magento\Customer\Model\ResourceModel\Customer\CollectionFactory $collection
      * @param \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orderCollection
@@ -66,6 +69,7 @@ class Customer
      */
     public function __construct(
         \Ebizmarts\MailChimp\Helper\Data $helper,
+        SyncHelper $syncHelper,
         \Magento\Customer\Model\CustomerFactory $customerFactory,
         \Magento\Customer\Model\ResourceModel\Customer\CollectionFactory $collection,
         \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orderCollection,
@@ -73,7 +77,6 @@ class Customer
         \Magento\Customer\Model\Address $address,
         \Magento\Newsletter\Model\SubscriberFactory $subscriberFactory
     ) {
-    
         $this->_helper              = $helper;
         $this->_collection          = $collection;
         $this->_orderCollection     = $orderCollection;
@@ -83,6 +86,7 @@ class Customer
         $this->_customerFactory     = $customerFactory;
         $this->_countryFactory      = $countryFactory;
         $this->subscriberFactory    = $subscriberFactory;
+        $this->syncHelper           = $syncHelper;
     }
     public function sendCustomers($storeId)
     {
@@ -100,13 +104,10 @@ class Customer
             "' and m4m.mailchimp_store_id = '".$mailchimpStoreId."'",
             ['m4m.*']
         );
-        $collection->getSelect()->where("m4m.mailchimp_sync_delta IS null ".
-            "OR (m4m.mailchimp_sync_delta > '".$this->_helper->getMCMinSyncDateFlag().
-            "' and m4m.mailchimp_sync_modified = 1)");
+        $collection->getSelect()->where("m4m.mailchimp_sync_delta IS null OR m4m.mailchimp_sync_modified = 1");
         $collection->getSelect()->limit(self::MAX);
         $counter = 0;
         $customerArray = [];
-        $this->_helper->resetMapFields();
 
         foreach ($collection as $item) {
             $customer = $this->_customerFactory->create();
@@ -178,7 +179,8 @@ class Customer
     protected function isSubscriber(\Magento\Customer\Model\Customer $customer)
     {
         $subscriber = $this->subscriberFactory->create();
-        $subscriber->loadByEmail($customer->getEmail());
+        $websiteId = $customer->getWebsiteId();
+        $subscriber->loadBySubscriberEmail($customer->getEmail(), $websiteId);
         if ($subscriber->getEmail() == $customer->getEmail()) {
             if ($subscriber->getStatus() === \Magento\Newsletter\Model\Subscriber::STATUS_SUBSCRIBED) {
                 return true;
@@ -273,7 +275,7 @@ class Customer
         $sync_error = null,
         $sync_modified = null
     ) {
-        $this->_helper->saveEcommerceData(
+        $this->syncHelper->saveEcommerceData(
             $storeId,
             $entityId,
             \Ebizmarts\MailChimp\Helper\Data::IS_CUSTOMER,
